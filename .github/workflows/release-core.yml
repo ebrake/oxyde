@@ -106,8 +106,7 @@ jobs:
         with:
           python-version: '3.14t'
 
-      - name: Build free-threaded wheels (macOS/Windows)
-        if: runner.os != 'Linux'
+      - name: Build free-threaded wheels
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
