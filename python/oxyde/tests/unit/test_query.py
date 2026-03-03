@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
 
@@ -343,8 +343,8 @@ async def test_async_manager_first_last_and_count() -> None:
         class Meta:
             is_table = True
 
-    first_payload = [{"id": 1, "created_at": datetime.utcnow().isoformat()}]
-    last_payload = [{"id": 5, "created_at": datetime.utcnow().isoformat()}]
+    first_payload = [{"id": 1, "created_at": datetime.now(timezone.utc).isoformat()}]
+    last_payload = [{"id": 5, "created_at": datetime.now(timezone.utc).isoformat()}]
     count_payload = [{"_count": 2}]
 
     stub = StubExecuteClient([first_payload, last_payload])

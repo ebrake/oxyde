@@ -14,7 +14,7 @@ from oxyde.exceptions import (
 from oxyde.tests.helpers import StubExecuteClient
 
 
-class TestModel(Model):
+class OxydeTestModel(Model):
     """Test model for CRUD operations."""
 
     id: int | None = Field(default=None, db_pk=True)
@@ -38,7 +38,7 @@ class TestModelSave:
             "rows": [[42, "Alice", None, 25, True]]
         }])
 
-        instance = TestModel(name="Alice", age=25)
+        instance = OxydeTestModel(name="Alice", age=25)
         result = await instance.save(client=stub)
 
         assert stub.calls[0]["op"] == "insert"
@@ -53,7 +53,7 @@ class TestModelSave:
             "rows": [[1, "Bob", None, 30, True]]
         }])
 
-        instance = TestModel(id=1, name="Bob", age=30)
+        instance = OxydeTestModel(id=1, name="Bob", age=30)
         result = await instance.save(client=stub)
 
         assert stub.calls[0]["op"] == "update"
@@ -67,7 +67,7 @@ class TestModelSave:
             "rows": [[1, "Charlie", "c@example.com", 35, True]]
         }])
 
-        instance = TestModel(id=1, name="Charlie", email="c@example.com", age=35)
+        instance = OxydeTestModel(id=1, name="Charlie", email="c@example.com", age=35)
         await instance.save(client=stub, update_fields=["name", "age"])
 
         call = stub.calls[0]
@@ -82,7 +82,7 @@ class TestModelSave:
         """Test save() with invalid field names raises error."""
         stub = StubExecuteClient([{"affected": 1}])
 
-        instance = TestModel(id=1, name="Test")
+        instance = OxydeTestModel(id=1, name="Test")
 
         with pytest.raises(FieldError):
             await instance.save(client=stub, update_fields=["nonexistent"])
@@ -92,7 +92,7 @@ class TestModelSave:
         """Test save() raises NotFoundError when record not found."""
         stub = StubExecuteClient([{"affected": 0}])
 
-        instance = TestModel(id=999, name="Ghost")
+        instance = OxydeTestModel(id=999, name="Ghost")
 
         with pytest.raises(NotFoundError):
             await instance.save(client=stub)
@@ -106,7 +106,7 @@ class TestModelDelete:
         """Test delete() removes record from database."""
         stub = StubExecuteClient([{"affected": 1}])
 
-        instance = TestModel(id=1, name="ToDelete")
+        instance = OxydeTestModel(id=1, name="ToDelete")
         affected = await instance.delete(client=stub)
 
         assert stub.calls[0]["op"] == "delete"
@@ -117,7 +117,7 @@ class TestModelDelete:
         """Test delete() without PK value raises error."""
         stub = StubExecuteClient([])
 
-        instance = TestModel(name="NoPK")
+        instance = OxydeTestModel(name="NoPK")
         instance.id = None
 
         with pytest.raises(ManagerError):
@@ -128,7 +128,7 @@ class TestModelDelete:
         """Test delete() returns number of affected rows."""
         stub = StubExecuteClient([{"affected": 0}])
 
-        instance = TestModel(id=999, name="NotFound")
+        instance = OxydeTestModel(id=999, name="NotFound")
         affected = await instance.delete(client=stub)
 
         assert affected == 0
@@ -154,7 +154,7 @@ class TestModelRefresh:
             ]
         )
 
-        instance = TestModel(id=1, name="Original", age=25)
+        instance = OxydeTestModel(id=1, name="Original", age=25)
         await instance.refresh(client=stub)
 
         assert instance.name == "Updated"
@@ -165,7 +165,7 @@ class TestModelRefresh:
         """Test refresh() without PK value raises error."""
         stub = StubExecuteClient([])
 
-        instance = TestModel(name="NoPK")
+        instance = OxydeTestModel(name="NoPK")
 
         with pytest.raises(ManagerError):
             await instance.refresh(client=stub)
@@ -179,9 +179,9 @@ class TestManagerCreate:
         """Test create() with keyword arguments."""
         stub = StubExecuteClient([{"affected": 1, "inserted_ids": [1]}])
 
-        instance = await TestModel.objects.create(client=stub, name="NewUser", age=25)
+        instance = await OxydeTestModel.objects.create(client=stub, name="NewUser", age=25)
 
-        assert isinstance(instance, TestModel)
+        assert isinstance(instance, OxydeTestModel)
         assert instance.name == "NewUser"
         assert stub.calls[0]["op"] == "insert"
 
@@ -190,8 +190,8 @@ class TestManagerCreate:
         """Test create() with model instance."""
         stub = StubExecuteClient([{"affected": 1, "inserted_ids": [1]}])
 
-        obj = TestModel(name="FromInstance", age=30)
-        instance = await TestModel.objects.create(client=stub, instance=obj)
+        obj = OxydeTestModel(name="FromInstance", age=30)
+        instance = await OxydeTestModel.objects.create(client=stub, instance=obj)
 
         assert instance is obj
         assert stub.calls[0]["op"] == "insert"
@@ -202,7 +202,7 @@ class TestManagerCreate:
         stub = StubExecuteClient([])
 
         with pytest.raises(ManagerError):
-            await TestModel.objects.create(client=stub)
+            await OxydeTestModel.objects.create(client=stub)
 
     @pytest.mark.asyncio
     async def test_create_instance_and_kwargs_raises(self):
@@ -210,8 +210,8 @@ class TestManagerCreate:
         stub = StubExecuteClient([])
 
         with pytest.raises(ManagerError):
-            await TestModel.objects.create(
-                client=stub, instance=TestModel(name="Test"), name="Other"
+            await OxydeTestModel.objects.create(
+                client=stub, instance=OxydeTestModel(name="Test"), name="Other"
             )
 
 
@@ -227,7 +227,7 @@ class TestManagerBulkCreate:
             {"name": "User1", "age": 20},
             {"name": "User2", "age": 30},
         ]
-        created = await TestModel.objects.bulk_create(objects, client=stub)
+        created = await OxydeTestModel.objects.bulk_create(objects, client=stub)
 
         assert len(created) == 2
         assert stub.calls[0]["op"] == "insert"
@@ -238,10 +238,10 @@ class TestManagerBulkCreate:
         stub = StubExecuteClient([{"affected": 2, "inserted_ids": [1, 2]}])
 
         objects = [
-            TestModel(name="User1", age=20),
-            TestModel(name="User2", age=30),
+            OxydeTestModel(name="User1", age=20),
+            OxydeTestModel(name="User2", age=30),
         ]
-        created = await TestModel.objects.bulk_create(objects, client=stub)
+        created = await OxydeTestModel.objects.bulk_create(objects, client=stub)
 
         assert len(created) == 2
         assert created[0].id == 1
@@ -254,9 +254,9 @@ class TestManagerBulkCreate:
 
         objects = [
             {"name": "Dict", "age": 20},
-            TestModel(name="Instance", age=30),
+            OxydeTestModel(name="Instance", age=30),
         ]
-        created = await TestModel.objects.bulk_create(objects, client=stub)
+        created = await OxydeTestModel.objects.bulk_create(objects, client=stub)
 
         assert len(created) == 2
 
@@ -265,7 +265,7 @@ class TestManagerBulkCreate:
         """Test bulk_create() with empty list returns empty."""
         stub = StubExecuteClient([])
 
-        created = await TestModel.objects.bulk_create([], client=stub)
+        created = await OxydeTestModel.objects.bulk_create([], client=stub)
 
         assert created == []
         assert len(stub.calls) == 0
@@ -280,10 +280,10 @@ class TestManagerBulkUpdate:
         stub = StubExecuteClient([{"affected": 2}])
 
         objects = [
-            TestModel(id=1, name="Updated1", age=25),
-            TestModel(id=2, name="Updated2", age=35),
+            OxydeTestModel(id=1, name="Updated1", age=25),
+            OxydeTestModel(id=2, name="Updated2", age=35),
         ]
-        affected = await TestModel.objects.bulk_update(
+        affected = await OxydeTestModel.objects.bulk_update(
             objects, ["name", "age"], client=stub
         )
 
@@ -294,17 +294,17 @@ class TestManagerBulkUpdate:
         """Test bulk_update() requires at least one field."""
         stub = StubExecuteClient([])
 
-        objects = [TestModel(id=1, name="Test")]
+        objects = [OxydeTestModel(id=1, name="Test")]
 
         with pytest.raises(ManagerError):
-            await TestModel.objects.bulk_update(objects, [], client=stub)
+            await OxydeTestModel.objects.bulk_update(objects, [], client=stub)
 
     @pytest.mark.asyncio
     async def test_bulk_update_empty_list(self):
         """Test bulk_update() with empty list returns 0."""
         stub = StubExecuteClient([])
 
-        affected = await TestModel.objects.bulk_update([], ["name"], client=stub)
+        affected = await OxydeTestModel.objects.bulk_update([], ["name"], client=stub)
 
         assert affected == 0
 
@@ -329,12 +329,12 @@ class TestManagerGetOrCreate:
             ]
         )
 
-        obj, created = await TestModel.objects.get_or_create(
+        obj, created = await OxydeTestModel.objects.get_or_create(
             client=stub, name="Existing"
         )
 
         assert created is False
-        assert isinstance(obj, TestModel)
+        assert isinstance(obj, OxydeTestModel)
         assert obj.id == 1
 
     @pytest.mark.asyncio
@@ -347,12 +347,12 @@ class TestManagerGetOrCreate:
             ]
         )
 
-        obj, created = await TestModel.objects.get_or_create(
+        obj, created = await OxydeTestModel.objects.get_or_create(
             client=stub, defaults={"age": 30}, name="NewUser"
         )
 
         assert created is True
-        assert isinstance(obj, TestModel)
+        assert isinstance(obj, OxydeTestModel)
         assert obj.name == "NewUser"
 
     @pytest.mark.asyncio
@@ -360,7 +360,7 @@ class TestManagerGetOrCreate:
         """Test get_or_create() uses defaults for new record."""
         stub = StubExecuteClient([[], {"affected": 1, "inserted_ids": [1]}])
 
-        obj, created = await TestModel.objects.get_or_create(
+        obj, created = await OxydeTestModel.objects.get_or_create(
             client=stub,
             defaults={"age": 99, "email": "test@example.com"},
             name="WithDefaults",
@@ -382,9 +382,9 @@ class TestManagerGet:
             [[{"id": 1, "name": "Found", "email": None, "age": 25, "is_active": True}]]
         )
 
-        obj = await TestModel.objects.get(client=stub, name="Found")
+        obj = await OxydeTestModel.objects.get(client=stub, name="Found")
 
-        assert isinstance(obj, TestModel)
+        assert isinstance(obj, OxydeTestModel)
         assert obj.name == "Found"
 
     @pytest.mark.asyncio
@@ -393,7 +393,7 @@ class TestManagerGet:
         stub = StubExecuteClient([[]])
 
         with pytest.raises(NotFoundError):
-            await TestModel.objects.get(client=stub, name="Missing")
+            await OxydeTestModel.objects.get(client=stub, name="Missing")
 
     @pytest.mark.asyncio
     async def test_get_multiple_raises(self):
@@ -420,7 +420,7 @@ class TestManagerGet:
         )
 
         with pytest.raises(MultipleObjectsReturned):
-            await TestModel.objects.get(client=stub, name="Dup")
+            await OxydeTestModel.objects.get(client=stub, name="Dup")
 
 
 class TestManagerGetOrNone:
@@ -433,7 +433,7 @@ class TestManagerGetOrNone:
             [[{"id": 1, "name": "Found", "email": None, "age": 25, "is_active": True}]]
         )
 
-        obj = await TestModel.objects.get_or_none(client=stub, name="Found")
+        obj = await OxydeTestModel.objects.get_or_none(client=stub, name="Found")
 
         assert obj is not None
         assert obj.name == "Found"
@@ -443,7 +443,7 @@ class TestManagerGetOrNone:
         """Test get_or_none() returns None when no match."""
         stub = StubExecuteClient([[]])
 
-        obj = await TestModel.objects.get_or_none(client=stub, name="Missing")
+        obj = await OxydeTestModel.objects.get_or_none(client=stub, name="Missing")
 
         assert obj is None
 
@@ -456,7 +456,7 @@ class TestManagerDelete:
         """Test delete() through filter."""
         stub = StubExecuteClient([{"affected": 5}])
 
-        affected = await TestModel.objects.filter(is_active=False).delete(client=stub)
+        affected = await OxydeTestModel.objects.filter(is_active=False).delete(client=stub)
 
         assert affected == 5
         assert stub.calls[0]["op"] == "delete"
@@ -474,7 +474,7 @@ class TestManagerUpdate:
         }])
 
         # update() takes keyword arguments, not positional dict
-        rows = await TestModel.objects.filter(is_active=True).update(
+        rows = await OxydeTestModel.objects.filter(is_active=True).update(
             age=25, client=stub
         )
 
@@ -492,7 +492,7 @@ class TestManagerFirstLast:
             [[{"id": 1, "name": "First", "email": None, "age": 20, "is_active": True}]]
         )
 
-        obj = await TestModel.objects.first(client=stub)
+        obj = await OxydeTestModel.objects.first(client=stub)
 
         assert obj is not None
         assert obj.id == 1
@@ -502,7 +502,7 @@ class TestManagerFirstLast:
         """Test first() returns None when no records."""
         stub = StubExecuteClient([[]])
 
-        obj = await TestModel.objects.first(client=stub)
+        obj = await OxydeTestModel.objects.first(client=stub)
 
         assert obj is None
 
@@ -513,7 +513,7 @@ class TestManagerFirstLast:
             [[{"id": 99, "name": "Last", "email": None, "age": 50, "is_active": True}]]
         )
 
-        obj = await TestModel.objects.last(client=stub)
+        obj = await OxydeTestModel.objects.last(client=stub)
 
         assert obj is not None
         assert obj.id == 99
@@ -528,7 +528,7 @@ class TestManagerCount:
         # count() expects aggregate result with _count field
         stub = StubExecuteClient([[{"_count": 3}]])
 
-        count = await TestModel.objects.count(client=stub)
+        count = await OxydeTestModel.objects.count(client=stub)
 
         assert count == 3
 
@@ -540,4 +540,4 @@ class TestManagerUpsert:
     async def test_upsert_raises_not_implemented(self):
         """Test upsert() raises ManagerError (not implemented)."""
         with pytest.raises(ManagerError):
-            await TestModel.objects.upsert()
+            await OxydeTestModel.objects.upsert()

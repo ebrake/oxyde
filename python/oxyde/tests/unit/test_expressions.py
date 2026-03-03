@@ -15,7 +15,7 @@ from oxyde.queries.expressions import (
 from oxyde.queries.q import Q
 
 
-class TestModel(Model):
+class OxydeTestModel(Model):
     """Test model for expression tests."""
 
     id: int | None = Field(default=None, db_pk=True)
@@ -246,7 +246,7 @@ class TestQExpressionBasics:
         """Test Q() with keyword arguments."""
         registered_tables()
         q = Q(name="test")
-        node = q.to_filter_node(TestModel)
+        node = q.to_filter_node(OxydeTestModel)
 
         assert node is not None
         assert node["field"] == "name"
@@ -255,14 +255,14 @@ class TestQExpressionBasics:
     def test_q_empty(self):
         """Test empty Q()."""
         q = Q()
-        node = q.to_filter_node(TestModel)
+        node = q.to_filter_node(OxydeTestModel)
         assert node is None
 
     def test_q_with_lookup(self):
         """Test Q() with lookup."""
         registered_tables()
         q = Q(age__gte=18)
-        node = q.to_filter_node(TestModel)
+        node = q.to_filter_node(OxydeTestModel)
 
         assert node is not None
         assert node["operator"] == ">="
@@ -280,7 +280,7 @@ class TestQAndComposition:
         """Test Q() & Q()."""
         registered_tables()
         q = Q(name="test") & Q(age__gte=18)
-        node = q.to_filter_node(TestModel)
+        node = q.to_filter_node(OxydeTestModel)
 
         assert node is not None
         assert node["type"] == "and"
@@ -290,7 +290,7 @@ class TestQAndComposition:
         """Test multiple AND operations."""
         registered_tables()
         q = Q(name="test") & Q(age__gte=18) & Q(is_active=True)
-        node = q.to_filter_node(TestModel)
+        node = q.to_filter_node(OxydeTestModel)
 
         assert node is not None
         assert node["type"] == "and"
@@ -299,7 +299,7 @@ class TestQAndComposition:
         """Test Q() & Q() where one is empty."""
         registered_tables()
         q = Q(name="test") & Q()
-        node = q.to_filter_node(TestModel)
+        node = q.to_filter_node(OxydeTestModel)
 
         # Should simplify to just the non-empty condition
         assert node is not None
@@ -312,7 +312,7 @@ class TestQOrComposition:
         """Test Q() | Q()."""
         registered_tables()
         q = Q(name="test") | Q(name="other")
-        node = q.to_filter_node(TestModel)
+        node = q.to_filter_node(OxydeTestModel)
 
         assert node is not None
         assert node["type"] == "or"
@@ -322,7 +322,7 @@ class TestQOrComposition:
         """Test multiple OR operations."""
         registered_tables()
         q = Q(name="a") | Q(name="b") | Q(name="c")
-        node = q.to_filter_node(TestModel)
+        node = q.to_filter_node(OxydeTestModel)
 
         assert node is not None
         assert node["type"] == "or"
@@ -335,7 +335,7 @@ class TestQNotComposition:
         """Test ~Q()."""
         registered_tables()
         q = ~Q(is_active=True)
-        node = q.to_filter_node(TestModel)
+        node = q.to_filter_node(OxydeTestModel)
 
         assert node is not None
         assert node["type"] == "not"
@@ -344,7 +344,7 @@ class TestQNotComposition:
         """Test ~~Q() (double negation)."""
         registered_tables()
         q = ~~Q(is_active=True)
-        node = q.to_filter_node(TestModel)
+        node = q.to_filter_node(OxydeTestModel)
 
         assert node is not None
         # Double NOT should result in NOT(NOT(...))
@@ -358,7 +358,7 @@ class TestQComplexComposition:
         """Test (Q() & Q()) | Q()."""
         registered_tables()
         q = (Q(name="test") & Q(age__gte=18)) | Q(is_active=False)
-        node = q.to_filter_node(TestModel)
+        node = q.to_filter_node(OxydeTestModel)
 
         assert node is not None
         assert node["type"] == "or"
@@ -367,7 +367,7 @@ class TestQComplexComposition:
         """Test (Q() | Q()) & Q()."""
         registered_tables()
         q = (Q(name="a") | Q(name="b")) & Q(is_active=True)
-        node = q.to_filter_node(TestModel)
+        node = q.to_filter_node(OxydeTestModel)
 
         assert node is not None
         assert node["type"] == "and"
@@ -376,7 +376,7 @@ class TestQComplexComposition:
         """Test ~(Q() & Q())."""
         registered_tables()
         q = ~(Q(name="test") & Q(age__gte=18))
-        node = q.to_filter_node(TestModel)
+        node = q.to_filter_node(OxydeTestModel)
 
         assert node is not None
         assert node["type"] == "not"
@@ -389,7 +389,7 @@ class TestQComplexComposition:
             & (Q(age__gte=18) | Q(is_active=True))
             & ~Q(balance=0)
         )
-        node = q.to_filter_node(TestModel)
+        node = q.to_filter_node(OxydeTestModel)
 
         assert node is not None
 
@@ -400,28 +400,28 @@ class TestQInQuery:
     def test_filter_with_q_single(self):
         """Test filter with single Q expression."""
         registered_tables()
-        ir = TestModel.objects.filter(Q(name="test")).to_ir()
+        ir = OxydeTestModel.objects.filter(Q(name="test")).to_ir()
 
         assert "filter_tree" in ir
 
     def test_filter_with_q_multiple(self):
         """Test filter with multiple Q expressions."""
         registered_tables()
-        ir = TestModel.objects.filter(Q(name="test"), Q(age__gte=18)).to_ir()
+        ir = OxydeTestModel.objects.filter(Q(name="test"), Q(age__gte=18)).to_ir()
 
         assert ir is not None
 
     def test_filter_with_q_and_kwargs(self):
         """Test filter with Q and kwargs."""
         registered_tables()
-        ir = TestModel.objects.filter(Q(name="test"), is_active=True).to_ir()
+        ir = OxydeTestModel.objects.filter(Q(name="test"), is_active=True).to_ir()
 
         assert ir is not None
 
     def test_exclude_negates(self):
         """Test exclude() creates negated conditions."""
         registered_tables()
-        query = TestModel.objects.exclude(is_active=True)
+        query = OxydeTestModel.objects.exclude(is_active=True)
         ir = query.to_ir()
 
         assert ir is not None
@@ -437,7 +437,7 @@ class TestQValidation:
 
         q = Q(nonexistent="value")
         with pytest.raises(FieldError):
-            q.to_filter_node(TestModel)
+            q.to_filter_node(OxydeTestModel)
 
     def test_q_with_invalid_lookup_raises(self):
         """Test Q() with invalid lookup raises error."""
@@ -446,7 +446,7 @@ class TestQValidation:
 
         q = Q(name__invalid="value")
         with pytest.raises(FieldLookupError):
-            q.to_filter_node(TestModel)
+            q.to_filter_node(OxydeTestModel)
 
     def test_q_and_with_non_q_raises(self):
         """Test Q() & non-Q raises TypeError."""
@@ -471,7 +471,7 @@ class TestQMultipleKwargs:
         """Test Q(a=1, b=2) creates AND of conditions."""
         registered_tables()
         q = Q(name="test", age=25)
-        node = q.to_filter_node(TestModel)
+        node = q.to_filter_node(OxydeTestModel)
 
         assert node is not None
         # Multiple kwargs should be ANDed together

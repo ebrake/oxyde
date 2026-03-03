@@ -31,7 +31,7 @@ def get_filter_condition(ir: dict[str, Any]) -> dict[str, Any]:
     raise ValueError(f"Expected single condition, got {tree.get('type')}")
 
 
-class TestModel(Model):
+class OxydeTestModel(Model):
     """Test model with various field types."""
 
     id: int | None = Field(default=None, db_pk=True)
@@ -81,43 +81,43 @@ class TestLookupCategory:
     def test_string_category(self):
         """Test string field category."""
         registered_tables()
-        meta = _resolve_column_meta(TestModel, "name")
+        meta = _resolve_column_meta(OxydeTestModel, "name")
         assert _lookup_category(meta) == "string"
 
     def test_numeric_category_int(self):
         """Test integer field category."""
         registered_tables()
-        meta = _resolve_column_meta(TestModel, "age")
+        meta = _resolve_column_meta(OxydeTestModel, "age")
         assert _lookup_category(meta) == "numeric"
 
     def test_numeric_category_float(self):
         """Test float field category."""
         registered_tables()
-        meta = _resolve_column_meta(TestModel, "price")
+        meta = _resolve_column_meta(OxydeTestModel, "price")
         assert _lookup_category(meta) == "numeric"
 
     def test_numeric_category_decimal(self):
         """Test Decimal field category."""
         registered_tables()
-        meta = _resolve_column_meta(TestModel, "balance")
+        meta = _resolve_column_meta(OxydeTestModel, "balance")
         assert _lookup_category(meta) == "numeric"
 
     def test_datetime_category(self):
         """Test datetime field category."""
         registered_tables()
-        meta = _resolve_column_meta(TestModel, "created_at")
+        meta = _resolve_column_meta(OxydeTestModel, "created_at")
         assert _lookup_category(meta) == "datetime"
 
     def test_date_category(self):
         """Test date field category."""
         registered_tables()
-        meta = _resolve_column_meta(TestModel, "birth_date")
+        meta = _resolve_column_meta(OxydeTestModel, "birth_date")
         assert _lookup_category(meta) == "datetime"
 
     def test_bool_category(self):
         """Test boolean field category."""
         registered_tables()
-        meta = _resolve_column_meta(TestModel, "is_active")
+        meta = _resolve_column_meta(OxydeTestModel, "is_active")
         # Note: bool is treated as numeric in lookup system
         category = _lookup_category(meta)
         assert category in ("bool", "generic", "numeric")
@@ -129,7 +129,7 @@ class TestAllowedLookups:
     def test_string_field_lookups(self):
         """Test allowed lookups for string fields."""
         registered_tables()
-        meta = _resolve_column_meta(TestModel, "name")
+        meta = _resolve_column_meta(OxydeTestModel, "name")
         allowed = _allowed_lookups_for_meta(meta)
 
         assert "exact" in allowed
@@ -144,7 +144,7 @@ class TestAllowedLookups:
     def test_numeric_field_lookups(self):
         """Test allowed lookups for numeric fields."""
         registered_tables()
-        meta = _resolve_column_meta(TestModel, "age")
+        meta = _resolve_column_meta(OxydeTestModel, "age")
         allowed = _allowed_lookups_for_meta(meta)
 
         assert "exact" in allowed
@@ -159,7 +159,7 @@ class TestAllowedLookups:
     def test_datetime_field_lookups(self):
         """Test allowed lookups for datetime fields."""
         registered_tables()
-        meta = _resolve_column_meta(TestModel, "created_at")
+        meta = _resolve_column_meta(OxydeTestModel, "created_at")
         allowed = _allowed_lookups_for_meta(meta)
 
         assert "exact" in allowed
@@ -177,7 +177,7 @@ class TestAllowedLookups:
     def test_bool_field_lookups(self):
         """Test allowed lookups for boolean fields."""
         registered_tables()
-        meta = _resolve_column_meta(TestModel, "is_active")
+        meta = _resolve_column_meta(OxydeTestModel, "is_active")
         allowed = _allowed_lookups_for_meta(meta)
 
         assert "exact" in allowed
@@ -202,7 +202,7 @@ class TestStringLookups:
     def test_string_pattern_lookups(self, lookup, operator, pattern_fn):
         """Test string pattern lookups generate correct conditions."""
         registered_tables()
-        ir = TestModel.objects.filter(**{f"name__{lookup}": "test"}).to_ir()
+        ir = OxydeTestModel.objects.filter(**{f"name__{lookup}": "test"}).to_ir()
         cond = get_filter_condition(ir)
 
         assert cond["operator"] == operator
@@ -211,7 +211,7 @@ class TestStringLookups:
     def test_iexact_lookup(self):
         """Test iexact lookup."""
         registered_tables()
-        ir = TestModel.objects.filter(name__iexact="Test").to_ir()
+        ir = OxydeTestModel.objects.filter(name__iexact="Test").to_ir()
         cond = get_filter_condition(ir)
 
         assert cond["operator"] == "ILIKE"
@@ -220,7 +220,7 @@ class TestStringLookups:
     def test_contains_escapes_wildcards(self):
         """Test that contains escapes SQL wildcards."""
         registered_tables()
-        ir = TestModel.objects.filter(name__contains="test%value").to_ir()
+        ir = OxydeTestModel.objects.filter(name__contains="test%value").to_ir()
         cond = get_filter_condition(ir)
 
         assert cond["operator"] == "LIKE"
@@ -229,7 +229,7 @@ class TestStringLookups:
     def test_contains_escapes_underscore(self):
         """Test that contains escapes underscore."""
         registered_tables()
-        ir = TestModel.objects.filter(name__contains="test_value").to_ir()
+        ir = OxydeTestModel.objects.filter(name__contains="test_value").to_ir()
         cond = get_filter_condition(ir)
 
         assert cond["operator"] == "LIKE"
@@ -240,10 +240,10 @@ class TestStringLookups:
         registered_tables()
 
         with pytest.raises(FieldLookupValueError):
-            TestModel.objects.filter(name__contains=123)
+            OxydeTestModel.objects.filter(name__contains=123)
 
         with pytest.raises(FieldLookupValueError):
-            TestModel.objects.filter(name__iexact=123)
+            OxydeTestModel.objects.filter(name__iexact=123)
 
 
 class TestNumericLookups:
@@ -261,7 +261,7 @@ class TestNumericLookups:
     def test_comparison_lookups(self, lookup, operator):
         """Test comparison lookups generate correct conditions."""
         registered_tables()
-        ir = TestModel.objects.filter(**{f"age__{lookup}": 18}).to_ir()
+        ir = OxydeTestModel.objects.filter(**{f"age__{lookup}": 18}).to_ir()
         cond = get_filter_condition(ir)
 
         assert cond["operator"] == operator
@@ -270,7 +270,7 @@ class TestNumericLookups:
     def test_between_lookup(self):
         """Test between lookup."""
         registered_tables()
-        ir = TestModel.objects.filter(age__between=(18, 65)).to_ir()
+        ir = OxydeTestModel.objects.filter(age__between=(18, 65)).to_ir()
         cond = get_filter_condition(ir)
 
         assert cond["operator"] == "BETWEEN"
@@ -281,20 +281,20 @@ class TestNumericLookups:
         registered_tables()
 
         with pytest.raises(FieldLookupValueError):
-            TestModel.objects.filter(age__between=18)
+            OxydeTestModel.objects.filter(age__between=18)
 
         with pytest.raises(FieldLookupValueError):
-            TestModel.objects.filter(age__between=(18,))
+            OxydeTestModel.objects.filter(age__between=(18,))
 
         with pytest.raises(FieldLookupValueError):
-            TestModel.objects.filter(age__between=(18, 25, 30))
+            OxydeTestModel.objects.filter(age__between=(18, 25, 30))
 
     def test_comparison_requires_non_null(self):
         """Test that comparison lookups require non-null values."""
         registered_tables()
 
         with pytest.raises(FieldLookupValueError):
-            TestModel.objects.filter(age__gt=None)
+            OxydeTestModel.objects.filter(age__gt=None)
 
 
 class TestCommonLookups:
@@ -303,7 +303,7 @@ class TestCommonLookups:
     def test_exact_lookup(self):
         """Test exact lookup."""
         registered_tables()
-        ir = TestModel.objects.filter(name="Alice").to_ir()
+        ir = OxydeTestModel.objects.filter(name="Alice").to_ir()
         cond = get_filter_condition(ir)
 
         assert cond["operator"] == "="
@@ -312,7 +312,7 @@ class TestCommonLookups:
     def test_exact_with_none(self):
         """Test exact lookup with None value."""
         registered_tables()
-        ir = TestModel.objects.filter(email=None).to_ir()
+        ir = OxydeTestModel.objects.filter(email=None).to_ir()
         cond = get_filter_condition(ir)
 
         assert cond["operator"] == "IS NULL"
@@ -320,7 +320,7 @@ class TestCommonLookups:
     def test_in_lookup(self):
         """Test in lookup."""
         registered_tables()
-        ir = TestModel.objects.filter(age__in=[18, 21, 25]).to_ir()
+        ir = OxydeTestModel.objects.filter(age__in=[18, 21, 25]).to_ir()
         cond = get_filter_condition(ir)
 
         assert cond["operator"] == "IN"
@@ -331,22 +331,22 @@ class TestCommonLookups:
         registered_tables()
 
         with pytest.raises(FieldLookupValueError):
-            TestModel.objects.filter(age__in=18)
+            OxydeTestModel.objects.filter(age__in=18)
 
         with pytest.raises(FieldLookupValueError):
-            TestModel.objects.filter(age__in=None)
+            OxydeTestModel.objects.filter(age__in=None)
 
     def test_in_rejects_string(self):
         """Test that in lookup rejects string (which is iterable but wrong)."""
         registered_tables()
 
         with pytest.raises(FieldLookupValueError):
-            TestModel.objects.filter(name__in="test")
+            OxydeTestModel.objects.filter(name__in="test")
 
     def test_isnull_true(self):
         """Test isnull=True lookup."""
         registered_tables()
-        ir = TestModel.objects.filter(email__isnull=True).to_ir()
+        ir = OxydeTestModel.objects.filter(email__isnull=True).to_ir()
         cond = get_filter_condition(ir)
 
         assert cond["operator"] == "IS NULL"
@@ -354,7 +354,7 @@ class TestCommonLookups:
     def test_isnull_false(self):
         """Test isnull=False lookup."""
         registered_tables()
-        ir = TestModel.objects.filter(email__isnull=False).to_ir()
+        ir = OxydeTestModel.objects.filter(email__isnull=False).to_ir()
         cond = get_filter_condition(ir)
 
         assert cond["operator"] == "IS NOT NULL"
@@ -376,7 +376,7 @@ class TestDatePartLookups:
     def test_year_lookup(self):
         """Test year lookup."""
         registered_tables()
-        ir = TestModel.objects.filter(created_at__year=2024).to_ir()
+        ir = OxydeTestModel.objects.filter(created_at__year=2024).to_ir()
         conditions = get_and_conditions(ir)
 
         # Year lookup generates two conditions: >= start AND < end
@@ -389,7 +389,7 @@ class TestDatePartLookups:
     def test_month_lookup(self):
         """Test month lookup."""
         registered_tables()
-        ir = TestModel.objects.filter(created_at__month=(2024, 3)).to_ir()
+        ir = OxydeTestModel.objects.filter(created_at__month=(2024, 3)).to_ir()
         conditions = get_and_conditions(ir)
 
         assert len(conditions) == 2
@@ -399,7 +399,7 @@ class TestDatePartLookups:
     def test_month_lookup_december_wraparound(self):
         """Test month lookup for December (wraps to next year)."""
         registered_tables()
-        ir = TestModel.objects.filter(created_at__month=(2024, 12)).to_ir()
+        ir = OxydeTestModel.objects.filter(created_at__month=(2024, 12)).to_ir()
         conditions = get_and_conditions(ir)
 
         assert "2024-12-01" in conditions[0]["value"]
@@ -408,7 +408,7 @@ class TestDatePartLookups:
     def test_day_lookup(self):
         """Test day lookup."""
         registered_tables()
-        ir = TestModel.objects.filter(created_at__day=(2024, 3, 15)).to_ir()
+        ir = OxydeTestModel.objects.filter(created_at__day=(2024, 3, 15)).to_ir()
         conditions = get_and_conditions(ir)
 
         assert len(conditions) == 2
@@ -420,24 +420,24 @@ class TestDatePartLookups:
         registered_tables()
 
         with pytest.raises(FieldLookupValueError):
-            TestModel.objects.filter(created_at__month=3)
+            OxydeTestModel.objects.filter(created_at__month=3)
 
     def test_day_requires_tuple(self):
         """Test that day lookup requires (year, month, day) tuple."""
         registered_tables()
 
         with pytest.raises(FieldLookupValueError):
-            TestModel.objects.filter(created_at__day=(2024, 3))
+            OxydeTestModel.objects.filter(created_at__day=(2024, 3))
 
     def test_month_validates_range(self):
         """Test that month value is validated."""
         registered_tables()
 
         with pytest.raises(FieldLookupValueError):
-            TestModel.objects.filter(created_at__month=(2024, 13))
+            OxydeTestModel.objects.filter(created_at__month=(2024, 13))
 
         with pytest.raises(FieldLookupValueError):
-            TestModel.objects.filter(created_at__month=(2024, 0))
+            OxydeTestModel.objects.filter(created_at__month=(2024, 0))
 
     def test_day_validates_date(self):
         """Test that day lookup validates the date."""
@@ -445,12 +445,12 @@ class TestDatePartLookups:
 
         # Feb 30 doesn't exist
         with pytest.raises(FieldLookupValueError):
-            TestModel.objects.filter(created_at__day=(2024, 2, 30))
+            OxydeTestModel.objects.filter(created_at__day=(2024, 2, 30))
 
     def test_date_part_lookups_on_date_field(self):
         """Test date part lookups on date field (not datetime)."""
         registered_tables()
-        ir = TestModel.objects.filter(birth_date__year=1990).to_ir()
+        ir = OxydeTestModel.objects.filter(birth_date__year=1990).to_ir()
         conditions = get_and_conditions(ir)
 
         assert len(conditions) == 2
@@ -464,28 +464,28 @@ class TestInvalidLookups:
         registered_tables()
 
         with pytest.raises(FieldLookupError):
-            TestModel.objects.filter(name__unknown="test")
+            OxydeTestModel.objects.filter(name__unknown="test")
 
     def test_string_lookup_on_numeric_field_raises(self):
         """Test that string lookup on numeric field raises error."""
         registered_tables()
 
         with pytest.raises(FieldLookupError):
-            TestModel.objects.filter(age__contains="18")
+            OxydeTestModel.objects.filter(age__contains="18")
 
     def test_date_part_lookup_on_string_field_raises(self):
         """Test that date part lookup on string field raises error."""
         registered_tables()
 
         with pytest.raises(FieldLookupError):
-            TestModel.objects.filter(name__year=2024)
+            OxydeTestModel.objects.filter(name__year=2024)
 
     def test_nonexistent_field_raises(self):
         """Test that nonexistent field raises FieldError."""
         registered_tables()
 
         with pytest.raises(FieldError):
-            TestModel.objects.filter(nonexistent="value")
+            OxydeTestModel.objects.filter(nonexistent="value")
 
 
 class TestMultipleFilters:
@@ -494,7 +494,7 @@ class TestMultipleFilters:
     def test_multiple_filters_same_field(self):
         """Test multiple filters on the same field."""
         registered_tables()
-        ir = TestModel.objects.filter(age__gte=18, age__lte=65).to_ir()
+        ir = OxydeTestModel.objects.filter(age__gte=18, age__lte=65).to_ir()
         conditions = get_and_conditions(ir)
 
         assert len(conditions) == 2
@@ -502,7 +502,7 @@ class TestMultipleFilters:
     def test_multiple_filters_different_fields(self):
         """Test multiple filters on different fields."""
         registered_tables()
-        ir = TestModel.objects.filter(name__icontains="test", age__gte=18).to_ir()
+        ir = OxydeTestModel.objects.filter(name__icontains="test", age__gte=18).to_ir()
         conditions = get_and_conditions(ir)
 
         assert len(conditions) == 2
@@ -511,7 +511,7 @@ class TestMultipleFilters:
         """Test chaining filter() calls."""
         registered_tables()
         # Manager.filter() returns Query, chain with filter()
-        query = TestModel.objects.filter(name__icontains="test").filter(age__gte=18)
+        query = OxydeTestModel.objects.filter(name__icontains="test").filter(age__gte=18)
         ir = query.to_ir()
         conditions = get_and_conditions(ir)
 
@@ -524,7 +524,7 @@ class TestResolveColumnMeta:
     def test_resolves_existing_field(self):
         """Test resolving metadata for existing field."""
         registered_tables()
-        meta = _resolve_column_meta(TestModel, "name")
+        meta = _resolve_column_meta(OxydeTestModel, "name")
 
         assert meta.name == "name"
         assert meta.python_type == str
@@ -532,7 +532,7 @@ class TestResolveColumnMeta:
     def test_resolves_pk_field(self):
         """Test resolving metadata for primary key field."""
         registered_tables()
-        meta = _resolve_column_meta(TestModel, "id")
+        meta = _resolve_column_meta(OxydeTestModel, "id")
 
         assert meta.primary_key is True
 
@@ -541,4 +541,4 @@ class TestResolveColumnMeta:
         registered_tables()
 
         with pytest.raises(FieldError):
-            _resolve_column_meta(TestModel, "nonexistent")
+            _resolve_column_meta(OxydeTestModel, "nonexistent")

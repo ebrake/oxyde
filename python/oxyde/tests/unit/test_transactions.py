@@ -22,7 +22,7 @@ def reset_transactions():
     _ACTIVE_TRANSACTIONS.set({})
 
 
-class TestModel(Model):
+class OxydeTestModel(Model):
     """Test model for transaction tests."""
 
     id: int | None = Field(default=None, db_pk=True)

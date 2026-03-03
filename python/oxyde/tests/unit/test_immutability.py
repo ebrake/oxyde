@@ -7,7 +7,7 @@ import pytest
 from oxyde import Field, Model
 
 
-class TestModel(Model):
+class OxydeTestModel(Model):
     """Test model for immutability tests."""
 
     id: int | None = Field(default=None, db_pk=True)
@@ -25,7 +25,7 @@ class TestQueryImmutability:
 
     def test_filter_returns_new_instance(self):
         """Test that filter() returns a new Query instance."""
-        base = TestModel.objects.filter()
+        base = OxydeTestModel.objects.filter()
         filtered = base.filter(name="test")
 
         assert base is not filtered
@@ -33,7 +33,7 @@ class TestQueryImmutability:
 
     def test_limit_returns_new_instance(self):
         """Test that limit() returns a new Query instance."""
-        base = TestModel.objects.filter()
+        base = OxydeTestModel.objects.filter()
         limited = base.limit(10)
 
         assert base is not limited
@@ -42,7 +42,7 @@ class TestQueryImmutability:
 
     def test_offset_returns_new_instance(self):
         """Test that offset() returns a new Query instance."""
-        base = TestModel.objects.filter()
+        base = OxydeTestModel.objects.filter()
         offset = base.offset(5)
 
         assert base is not offset
@@ -51,7 +51,7 @@ class TestQueryImmutability:
 
     def test_order_by_returns_new_instance(self):
         """Test that order_by() returns a new Query instance."""
-        base = TestModel.objects.filter()
+        base = OxydeTestModel.objects.filter()
         ordered = base.order_by("name")
 
         assert base is not ordered
@@ -60,7 +60,7 @@ class TestQueryImmutability:
 
     def test_distinct_returns_new_instance(self):
         """Test that distinct() returns a new Query instance."""
-        base = TestModel.objects.filter()
+        base = OxydeTestModel.objects.filter()
         distinct = base.distinct()
 
         assert base is not distinct
@@ -69,14 +69,14 @@ class TestQueryImmutability:
 
     def test_select_returns_new_instance(self):
         """Test that select() returns a new Query instance."""
-        base = TestModel.objects.filter()
+        base = OxydeTestModel.objects.filter()
         selected = base.select("id", "name")
 
         assert base is not selected
 
     def test_values_returns_new_instance(self):
         """Test that values() returns a new Query instance."""
-        base = TestModel.objects.filter()
+        base = OxydeTestModel.objects.filter()
         values = base.values("id", "name")
 
         assert base is not values
@@ -84,7 +84,7 @@ class TestQueryImmutability:
 
     def test_values_list_returns_new_instance(self):
         """Test that values_list() returns a new Query instance."""
-        base = TestModel.objects.filter()
+        base = OxydeTestModel.objects.filter()
         values_list = base.values_list("id")
 
         assert base is not values_list
@@ -115,7 +115,7 @@ class TestQueryImmutability:
 
     def test_prefetch_returns_new_instance(self):
         """Test that prefetch() returns a new Query instance."""
-        base = TestModel.objects.filter()
+        base = OxydeTestModel.objects.filter()
         prefetched = base.prefetch("items")
 
         assert base is not prefetched
@@ -126,7 +126,7 @@ class TestChainedImmutability:
 
     def test_chain_preserves_all_original_queries(self):
         """Test that chaining preserves all intermediate queries."""
-        q1 = TestModel.objects.filter()
+        q1 = OxydeTestModel.objects.filter()
         q2 = q1.filter(name="test")
         q3 = q2.limit(10)
         q4 = q3.offset(5)
@@ -152,7 +152,7 @@ class TestChainedImmutability:
 
     def test_branching_from_same_base(self):
         """Test creating multiple branches from the same base query."""
-        base = TestModel.objects.filter(is_active=True)
+        base = OxydeTestModel.objects.filter(is_active=True)
 
         branch1 = base.limit(10)
         branch2 = base.limit(20)
@@ -170,7 +170,7 @@ class TestChainedImmutability:
 
     def test_filter_accumulation(self):
         """Test that filters accumulate correctly."""
-        q1 = TestModel.objects.filter()
+        q1 = OxydeTestModel.objects.filter()
         q2 = q1.filter(name="test")
         q3 = q2.filter(age__gt=18)
 
@@ -197,7 +197,7 @@ class TestQuerySetImmutability:
 
     def test_queryset_filter_returns_query(self):
         """Test that QuerySet.filter() returns immutable Query."""
-        base = TestModel.objects.filter(name="test")
+        base = OxydeTestModel.objects.filter(name="test")
         chained = base.filter(age__gte=18)
 
         assert base is not chained
@@ -226,7 +226,7 @@ class TestQuerySetImmutability:
 
     def test_queryset_prefetch_returns_new_instance(self):
         """Test that QuerySet.prefetch() returns new QuerySet."""
-        base = TestModel.objects.filter()
+        base = OxydeTestModel.objects.filter()
         prefetched = base.prefetch("items")
 
         assert base is not prefetched
@@ -279,14 +279,14 @@ class TestSliceImmutability:
 
     def test_slice_returns_new_instance(self):
         """Test that slicing returns a new Query instance."""
-        base = TestModel.objects.filter()
+        base = OxydeTestModel.objects.filter()
         sliced = base[5:10]
 
         assert base is not sliced
 
     def test_slice_preserves_original(self):
         """Test that slicing preserves the original query."""
-        base = TestModel.objects.filter()
+        base = OxydeTestModel.objects.filter()
         sliced = base[5:10]
 
         base_ir = base.to_ir()
@@ -299,7 +299,7 @@ class TestSliceImmutability:
 
     def test_index_returns_new_instance(self):
         """Test that indexing returns a new Query instance."""
-        base = TestModel.objects.filter()
+        base = OxydeTestModel.objects.filter()
         indexed = base[3]
 
         assert base is not indexed
@@ -314,7 +314,7 @@ class TestCloneDeepCopy:
 
     def test_filter_tree_is_independent(self):
         """Test that filter tree is independent between queries."""
-        q1 = TestModel.objects.filter(name="test")
+        q1 = OxydeTestModel.objects.filter(name="test")
         q2 = q1.filter(age__gt=18)
 
         # q2's filter tree should have both conditions, q1 should only have one
@@ -332,7 +332,7 @@ class TestCloneDeepCopy:
 
     def test_order_by_list_is_copied(self):
         """Test that order_by list is deep copied."""
-        q1 = TestModel.objects.filter().order_by("name")
+        q1 = OxydeTestModel.objects.filter().order_by("name")
         q2 = q1.order_by("-age")
 
         q1_order = q1.to_ir().get("order_by", [])
@@ -343,7 +343,7 @@ class TestCloneDeepCopy:
 
     def test_selected_fields_is_copied(self):
         """Test that selected fields list is deep copied."""
-        q1 = TestModel.objects.filter().select("id", "name")
+        q1 = OxydeTestModel.objects.filter().select("id", "name")
         q2 = q1.select("id", "name", "email")
 
         # Both should have their own field selections
@@ -357,7 +357,7 @@ class TestAnnotationsImmutability:
         """Test that annotate() returns new instance."""
         from oxyde.queries.aggregates import Count
 
-        base = TestModel.objects.filter()
+        base = OxydeTestModel.objects.filter()
         annotated = base.annotate(total=Count("*"))
 
         assert base is not annotated
@@ -366,7 +366,7 @@ class TestAnnotationsImmutability:
         """Test that group_by() returns new instance."""
         from oxyde.queries.aggregates import Count
 
-        base = TestModel.objects.filter().annotate(total=Count("*"))
+        base = OxydeTestModel.objects.filter().annotate(total=Count("*"))
         grouped = base.group_by("name")
 
         assert base is not grouped
