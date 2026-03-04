@@ -1,6 +1,6 @@
 //! PostgreSQL parameter binding
 
-use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use rust_decimal::Decimal;
 use uuid::Uuid;
 
@@ -47,6 +47,8 @@ pub fn bind_postgres_value<'q>(query: PgQuery<'q>, value: &'q Value) -> Result<P
         Value::Bytes(Some(bytes)) => query.bind(bytes.as_ref().as_slice()),
         Value::Bytes(None) => query.bind(Option::<Vec<u8>>::None),
         // Chrono types
+        Value::ChronoDateTimeUtc(Some(dt)) => query.bind(**dt),
+        Value::ChronoDateTimeUtc(None) => query.bind(Option::<DateTime<Utc>>::None),
         Value::ChronoDateTime(Some(dt)) => query.bind(**dt),
         Value::ChronoDateTime(None) => query.bind(Option::<NaiveDateTime>::None),
         Value::ChronoDate(Some(d)) => query.bind(**d),

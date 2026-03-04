@@ -47,7 +47,9 @@ pub fn bind_sqlite_value<'q>(query: SqliteQuery<'q>, value: &'q Value) -> Result
         Value::Char(None) => query.bind(Option::<String>::None),
         Value::Bytes(Some(bytes)) => query.bind(bytes.as_ref().as_slice()),
         Value::Bytes(None) => query.bind(Option::<Vec<u8>>::None),
-        // Chrono types
+        // Chrono types. tz-aware normalized to naive UTC
+        Value::ChronoDateTimeUtc(Some(dt)) => query.bind(dt.naive_utc()),
+        Value::ChronoDateTimeUtc(None) => query.bind(Option::<NaiveDateTime>::None),
         Value::ChronoDateTime(Some(dt)) => query.bind(**dt),
         Value::ChronoDateTime(None) => query.bind(Option::<NaiveDateTime>::None),
         Value::ChronoDate(Some(d)) => query.bind(**d),

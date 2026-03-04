@@ -1,6 +1,6 @@
 //! JSON to sea_query Value conversion utilities
 
-use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use sea_query::{Expr, SimpleExpr, Value};
 
 use crate::error::{QueryError, Result};
@@ -33,11 +33,11 @@ pub fn json_to_value_typed(value: &serde_json::Value, col_type: Option<&str>) ->
             }
         }
         serde_json::Value::String(s) => {
-            // Use type hint to parse string into appropriate type
+            // With type hint: try naive datetime/date/time formats
+            // (too loose to try without knowing the column type)
             if let Some(typ) = col_type {
                 match typ.to_uppercase().as_str() {
                     "DATETIME" | "TIMESTAMP" | "TIMESTAMPTZ" => {
-                        // Try parsing ISO datetime formats
                         if let Ok(dt) = parse_datetime(s) {
                             return Value::ChronoDateTime(Some(Box::new(dt)));
                         }
@@ -56,12 +56,24 @@ pub fn json_to_value_typed(value: &serde_json::Value, col_type: Option<&str>) ->
                     _ => {}
                 }
             }
+            // RFC3339 is strict enough to try without type hint,
+            // so tz-aware datetimes work in filters (no col_type there)
+            if let Some(dt) = parse_datetime_utc(s) {
+                return Value::ChronoDateTimeUtc(Some(Box::new(dt)));
+            }
             Value::String(Some(Box::new(s.clone())))
         }
         serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
             Value::String(Some(Box::new(value.to_string())))
         }
     }
+}
+
+/// Parse tz-aware datetime string and normalize to UTC
+fn parse_datetime_utc(s: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(s)
+        .map(|dt| dt.with_timezone(&Utc))
+        .ok()
 }
 
 /// Parse datetime string in various ISO-like formats
