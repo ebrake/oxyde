@@ -143,9 +143,6 @@ pub use settings::PoolSettings;
 // Pool API
 pub use pool::api::{close_all_pools, close_pool, init_pool, init_pool_overwrite, pool_backend};
 
-#[cfg(feature = "pyo3")]
-pub use pool::api::get_pool;
-
 // Transaction API
 pub use transaction::api::{
     begin_transaction, commit_transaction, create_savepoint, release_savepoint,
@@ -154,9 +151,8 @@ pub use transaction::api::{
 
 // Query / statement execution
 pub use execute::query::{
-    execute_mutation_returning, execute_mutation_returning_in_transaction, execute_query,
-    execute_query_columnar, execute_query_columnar_in_transaction, execute_query_in_transaction,
-    execute_statement, execute_statement_in_transaction,
+    execute_mutation_returning, execute_mutation_returning_in_transaction, execute_query_columnar,
+    execute_query_columnar_in_transaction, execute_statement, execute_statement_in_transaction,
 };
 
 // INSERT RETURNING
@@ -194,6 +190,26 @@ mod tests {
         }
     }
 
+    /// Decode msgpack columnar result [columns, rows] → (columns, rows).
+    /// Each row is a Vec of rmpv::Value.
+    fn decode_columnar(buf: &[u8]) -> (Vec<String>, Vec<Vec<rmpv::Value>>) {
+        let val: rmpv::Value = rmp_serde::from_slice(buf).unwrap();
+        let arr = val.as_array().unwrap();
+        let columns: Vec<String> = arr[0]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        let rows: Vec<Vec<rmpv::Value>> = arr[1]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row.as_array().unwrap().clone())
+            .collect();
+        (columns, rows)
+    }
+
     #[tokio::test]
     async fn init_and_close_multiple_pools() {
         let _guard = TEST_MUTEX.lock().await;
@@ -206,7 +222,6 @@ mod tests {
             .await
             .unwrap();
 
-        // Simple statement against each pool
         execute_statement("default", "CREATE TABLE foo (id INTEGER)", &[])
             .await
             .unwrap();
@@ -214,7 +229,6 @@ mod tests {
             .await
             .unwrap();
 
-        // Duplicate name should error
         assert!(matches!(
             init_pool("default", "sqlite::memory:", sqlite_settings()).await,
             Err(DriverError::PoolAlreadyExists(_))
@@ -223,7 +237,6 @@ mod tests {
         close_pool("default").await.unwrap();
         close_pool("analytics").await.unwrap();
 
-        // Closing twice should error
         assert!(matches!(
             close_pool("default").await,
             Err(DriverError::PoolNotFound(_))
@@ -255,7 +268,7 @@ mod tests {
         .await
         .unwrap();
 
-        let rows = execute_query(
+        let (bytes, num_rows) = execute_query_columnar(
             "default",
             "SELECT name FROM foo WHERE id = ?",
             &[Value::from(1_i64)],
@@ -264,11 +277,10 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(rows.len(), 1);
-        assert_eq!(
-            rows[0].get("name"),
-            Some(&serde_json::Value::String("Ada".to_string()))
-        );
+        assert_eq!(num_rows, 1);
+        let (columns, rows) = decode_columnar(&bytes);
+        assert_eq!(columns, vec!["name"]);
+        assert_eq!(rows[0][0].as_str().unwrap(), "Ada");
 
         close_pool("default").await.unwrap();
     }
@@ -300,7 +312,7 @@ mod tests {
         .unwrap();
         commit_transaction(tx_id).await.unwrap();
 
-        let rows = execute_query(
+        let (bytes, num_rows) = execute_query_columnar(
             "default",
             "SELECT name FROM foo WHERE id = ?",
             &[Value::from(10_i64)],
@@ -308,11 +320,9 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(
-            rows[0].get("name"),
-            Some(&serde_json::Value::String("Commit".to_string()))
-        );
+        assert_eq!(num_rows, 1);
+        let (_columns, rows) = decode_columnar(&bytes);
+        assert_eq!(rows[0][0].as_str().unwrap(), "Commit");
 
         close_pool("default").await.unwrap();
     }
@@ -344,7 +354,7 @@ mod tests {
         .unwrap();
         rollback_transaction(tx_id).await.unwrap();
 
-        let rows = execute_query(
+        let (_bytes, num_rows) = execute_query_columnar(
             "default",
             "SELECT name FROM foo WHERE id = ?",
             &[Value::from(11_i64)],
@@ -352,7 +362,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(rows.is_empty());
+        assert_eq!(num_rows, 0);
 
         close_pool("default").await.unwrap();
     }

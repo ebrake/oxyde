@@ -4,13 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
-[features]
-default = []
-pyo3 = ["dep:pyo3"]
-
 [dependencies]
-# Optional PyO3 dependency for direct Row -> PyObject conversion
-pyo3 = { version = "0.26", optional = true }
 async-trait = "0.1"
 tokio.workspace = true
 anyhow.workspace = true
@@ -25,8 +19,10 @@ chrono = { version = "0.4", features = ["serde"] }
 rust_decimal = { version = "1", features = ["serde"] }
 base64 = "0.21"
 rmp = "0.8"
-oxyde-codec = { path = "../oxyde-codec" }
 
 [dev-dependencies]
 tempfile = "3"
+rmp-serde = "1.1"
+rmpv = { version = "1", features = ["with-serde"] }
+oxyde-codec = { path = "../oxyde-codec" }
 oxyde-query = { path = "../oxyde-query" }

@@ -16,50 +16,7 @@ fn is_profiling_enabled() -> bool {
         .unwrap_or(false)
 }
 
-pub async fn execute_query(
-    pool_name: &str,
-    sql: &str,
-    params: &[Value],
-    col_types: Option<&HashMap<String, String>>,
-) -> Result<Vec<HashMap<String, serde_json::Value>>> {
-    debug!(
-        "Executing query on '{}': {} ({} params, col_types: {})",
-        pool_name,
-        sql,
-        params.len(),
-        col_types.is_some()
-    );
-
-    let profile = is_profiling_enabled();
-    let handle = registry().get(pool_name).await?;
-    let pool = handle.clone_pool();
-
-    let start = Instant::now();
-    let results = pool.query(sql, params, col_types).await?;
-    let elapsed_us = start.elapsed().as_micros();
-
-    if profile {
-        eprintln!(
-            "[OXYDE_PROFILE] execute_query ({}, {} rows): total={} µs",
-            pool.backend_name(),
-            results.len(),
-            elapsed_us
-        );
-    }
-    debug!(
-        "Query on '{}' ({}) returned {} rows",
-        pool_name,
-        pool.backend_name(),
-        results.len()
-    );
-    Ok(results)
-}
-
-/// Execute a SELECT query and return results in columnar format.
-/// This is more memory-efficient than execute_query for large result sets:
-/// - Column names stored once instead of per-row
-/// - No HashMap overhead per row
-/// - Smaller msgpack serialization
+/// Execute a SELECT query and return pre-encoded msgpack bytes + row count.
 pub async fn execute_query_columnar(
     pool_name: &str,
     sql: &str,
@@ -130,30 +87,6 @@ pub async fn execute_statement(pool_name: &str, sql: &str, params: &[Value]) -> 
         affected
     );
     Ok(affected)
-}
-
-pub async fn execute_query_in_transaction(
-    tx_id: u64,
-    sql: &str,
-    params: &[Value],
-    col_types: Option<&HashMap<String, String>>,
-) -> Result<Vec<HashMap<String, serde_json::Value>>> {
-    let registry = transaction_registry();
-    let arc = registry
-        .get(tx_id)
-        .await
-        .ok_or(DriverError::TransactionNotFound(tx_id))?;
-    let mut tx = arc.lock().await;
-    if !tx.is_active() {
-        return Err(DriverError::TransactionClosed(tx_id));
-    }
-    tx.update_activity();
-
-    let conn = tx
-        .conn
-        .as_mut()
-        .ok_or(DriverError::TransactionClosed(tx_id))?;
-    conn.query(sql, params, col_types).await
 }
 
 /// Execute SELECT query in transaction returning pre-encoded msgpack bytes + row count.

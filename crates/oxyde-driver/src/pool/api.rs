@@ -174,13 +174,6 @@ pub async fn pool_backend(name: &str) -> Result<DatabaseBackend> {
     registry().get(name).await.map(|handle| handle.backend)
 }
 
-/// Get a clone of the connection pool by name.
-/// Used by oxyde-core-py for direct PyO3 conversion.
-#[cfg(feature = "pyo3")]
-pub async fn get_pool(name: &str) -> Result<DbPool> {
-    registry().get(name).await.map(|handle| handle.clone_pool())
-}
-
 fn backend_from_url(url: &str) -> Option<DatabaseBackend> {
     if url.starts_with("postgres") {
         Some(DatabaseBackend::Postgres)

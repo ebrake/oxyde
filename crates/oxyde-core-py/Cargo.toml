@@ -24,7 +24,7 @@ pyo3-async-runtimes = { version = "0.26", features = ["tokio-runtime"] }
 rmp-serde = "1.1"
 oxyde-codec = { path = "../oxyde-codec" }
 oxyde-query = { path = "../oxyde-query" }
-oxyde-driver = { path = "../oxyde-driver", features = ["pyo3"] }
+oxyde-driver = { path = "../oxyde-driver" }
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "postgres", "mysql"] }
 oxyde-migrate = { path = "../oxyde-migrate" }
 once_cell = "1.19"

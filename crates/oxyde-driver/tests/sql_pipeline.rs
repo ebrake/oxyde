@@ -1,9 +1,29 @@
 use oxyde_codec::{Filter, FilterNode, Operation, QueryIR, IR_PROTO_VERSION};
-use oxyde_driver::{close_pool, execute_query, execute_statement, init_pool, PoolSettings};
+use oxyde_driver::{
+    close_pool, execute_query_columnar, execute_statement, init_pool, PoolSettings,
+};
 use oxyde_query::{build_sql, Dialect};
 use serde_json::json;
 use std::collections::HashMap;
 use uuid::Uuid;
+
+fn decode_columnar(buf: &[u8]) -> (Vec<String>, Vec<Vec<rmpv::Value>>) {
+    let val: rmpv::Value = rmp_serde::from_slice(buf).unwrap();
+    let arr = val.as_array().unwrap();
+    let columns: Vec<String> = arr[0]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    let rows: Vec<Vec<rmpv::Value>> = arr[1]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row.as_array().unwrap().clone())
+        .collect();
+    (columns, rows)
+}
 
 #[tokio::test]
 async fn sqlite_end_to_end_pipeline() {
@@ -99,14 +119,14 @@ async fn sqlite_end_to_end_pipeline() {
         pk_column: None,
     };
     let (select_sql, select_params) = build_sql(&select_ir, Dialect::Sqlite).unwrap();
-    let rows = execute_query(&pool_name, &select_sql, &select_params, None)
+    let (bytes, num_rows) = execute_query_columnar(&pool_name, &select_sql, &select_params, None)
         .await
         .unwrap();
-    assert_eq!(rows.len(), 1);
-    assert_eq!(
-        rows[0].get("name"),
-        Some(&serde_json::Value::String("Ada Lovelace".into()))
-    );
+
+    assert_eq!(num_rows, 1);
+    let (columns, rows) = decode_columnar(&bytes);
+    assert_eq!(columns, vec!["id", "name"]);
+    assert_eq!(rows[0][1].as_str().unwrap(), "Ada Lovelace");
 
     close_pool(&pool_name).await.unwrap();
 }

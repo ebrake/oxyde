@@ -10,9 +10,7 @@ pub enum DatabaseBackend {
 }
 
 /// Database pool enum holding connections for different backends.
-/// Made public when pyo3 feature is enabled for direct conversion.
 #[derive(Clone)]
-#[cfg_attr(feature = "pyo3", derive())]
 pub enum DbPool {
     Postgres(PgPool),
     MySql(MySqlPool),

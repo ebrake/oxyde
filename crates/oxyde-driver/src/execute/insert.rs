@@ -1,22 +1,33 @@
 //! INSERT RETURNING execution (pool and transaction paths).
 
 use sea_query::Value;
+use sqlx::Row;
 use tracing::{debug, warn};
 
 use crate::bind::{bind_mysql, bind_postgres, bind_sqlite};
-use crate::convert::{convert_pg_rows, convert_sqlite_rows};
 use crate::error::{DriverError, Result};
 use crate::pool::DbPool;
 use crate::transaction::DbConn;
 use crate::{registry, transaction_registry};
 
+/// Extract PK value from a row by column name.
+/// Tries i64 first, then String (covers UUID, text PKs).
+fn extract_pk<R: Row>(row: &R, pk_col: &str) -> Option<serde_json::Value>
+where
+    for<'r> i64: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
+    for<'r> String: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
+    for<'r> &'r str: sqlx::ColumnIndex<R>,
+{
+    if let Ok(v) = row.try_get::<i64, _>(pk_col) {
+        return Some(serde_json::Value::Number(serde_json::Number::from(v)));
+    }
+    if let Ok(v) = row.try_get::<String, _>(pk_col) {
+        return Some(serde_json::Value::String(v));
+    }
+    None
+}
+
 /// Execute INSERT and return generated IDs (supports any PK type: i64, UUID, String, etc.)
-///
-/// # Arguments
-/// * `pool_name` - Database pool name
-/// * `sql` - INSERT SQL statement
-/// * `params` - Query parameters
-/// * `pk_column` - Primary key column name (defaults to "id" if None)
 pub async fn execute_insert_returning(
     pool_name: &str,
     sql: &str,
@@ -35,7 +46,6 @@ pub async fn execute_insert_returning(
     let handle = registry().get(pool_name).await?;
     match handle.clone_pool() {
         DbPool::Postgres(pool) => {
-            // PostgreSQL: Use SQL as-is if it has RETURNING, else add RETURNING {pk_col}
             let has_returning = sql.to_uppercase().contains("RETURNING");
             let returning_sql = if has_returning {
                 sql.to_string()
@@ -48,11 +58,9 @@ pub async fn execute_insert_returning(
                 DriverError::ExecutionError(format!("INSERT RETURNING failed: {}", e))
             })?;
 
-            // Extract PK values using batch row conversion
-            let row_maps = convert_pg_rows(rows);
-            let ids: Vec<serde_json::Value> = row_maps
-                .into_iter()
-                .filter_map(|row_map| row_map.get(pk_col).cloned().filter(|v| !v.is_null()))
+            let ids: Vec<serde_json::Value> = rows
+                .iter()
+                .filter_map(|row| extract_pk(row, pk_col))
                 .collect();
 
             debug!(
@@ -63,8 +71,6 @@ pub async fn execute_insert_returning(
             Ok(ids)
         }
         DbPool::MySql(pool) => {
-            // MySQL: Execute INSERT, then compute ID range from last_insert_id
-            // Note: MySQL doesn't support RETURNING, so we can only get numeric auto-increment IDs
             let query = bind_mysql(sqlx::query(sql), params)?;
             let result = query
                 .execute(&pool)
@@ -74,8 +80,6 @@ pub async fn execute_insert_returning(
             let rows_affected = result.rows_affected() as i64;
             let last_id = result.last_insert_id() as i64;
 
-            // MySQL last_insert_id() returns the FIRST auto-generated ID
-            // Generate ID range: [first_id .. first_id + rows)
             let ids: Vec<serde_json::Value> = if rows_affected > 0 && last_id > 0 {
                 (last_id..last_id + rows_affected)
                     .map(|id| serde_json::Value::Number(serde_json::Number::from(id)))
@@ -94,7 +98,6 @@ pub async fn execute_insert_returning(
             Ok(ids)
         }
         DbPool::Sqlite(pool) => {
-            // SQLite: Try RETURNING first (SQLite 3.35+), fallback to last_insert_rowid
             let has_returning = sql.to_uppercase().contains("RETURNING");
             let returning_sql = if has_returning {
                 sql.to_string()
@@ -104,14 +107,11 @@ pub async fn execute_insert_returning(
 
             let query = bind_sqlite(sqlx::query(&returning_sql), params)?;
 
-            // Try RETURNING first
             match query.fetch_all(&pool).await {
                 Ok(rows) => {
-                    // RETURNING is supported - extract PK values using batch row conversion
-                    let row_maps = convert_sqlite_rows(rows);
-                    let ids: Vec<serde_json::Value> = row_maps
-                        .into_iter()
-                        .filter_map(|row_map| row_map.get(pk_col).cloned().filter(|v| !v.is_null()))
+                    let ids: Vec<serde_json::Value> = rows
+                        .iter()
+                        .filter_map(|row| extract_pk(row, pk_col))
                         .collect();
 
                     debug!(
@@ -122,10 +122,8 @@ pub async fn execute_insert_returning(
                     Ok(ids)
                 }
                 Err(_) => {
-                    // RETURNING not supported - fallback to last_insert_rowid (only works for INTEGER PK)
                     warn!(
-                        "SQLite RETURNING not supported (version < 3.35), falling back to last_insert_rowid. \
-                        This only works for INTEGER PRIMARY KEY and may produce incorrect IDs with concurrent inserts."
+                        "SQLite RETURNING not supported (version < 3.35), falling back to last_insert_rowid."
                     );
 
                     let query = bind_sqlite(sqlx::query(sql), params)?;
@@ -156,12 +154,6 @@ pub async fn execute_insert_returning(
 }
 
 /// Execute INSERT within a transaction and return generated IDs (supports any PK type)
-///
-/// # Arguments
-/// * `tx_id` - Transaction ID
-/// * `sql` - INSERT SQL statement
-/// * `params` - Query parameters
-/// * `pk_column` - Primary key column name (defaults to "id" if None)
 pub async fn execute_insert_returning_in_transaction(
     tx_id: u64,
     sql: &str,
@@ -178,8 +170,6 @@ pub async fn execute_insert_returning_in_transaction(
     if !tx.is_active() {
         return Err(DriverError::TransactionClosed(tx_id));
     }
-
-    // Update activity timestamp to prevent premature cleanup
     tx.update_activity();
 
     let conn = tx
@@ -189,7 +179,6 @@ pub async fn execute_insert_returning_in_transaction(
 
     match conn {
         DbConn::Postgres(conn) => {
-            // PostgreSQL: Use SQL as-is if it has RETURNING, else add RETURNING {pk_col}
             let has_returning = sql.to_uppercase().contains("RETURNING");
             let returning_sql = if has_returning {
                 sql.to_string()
@@ -202,11 +191,9 @@ pub async fn execute_insert_returning_in_transaction(
                 DriverError::ExecutionError(format!("INSERT RETURNING failed: {}", e))
             })?;
 
-            // Extract PK values using batch row conversion
-            let row_maps = convert_pg_rows(rows);
-            let ids: Vec<serde_json::Value> = row_maps
-                .into_iter()
-                .filter_map(|row_map| row_map.get(pk_col).cloned().filter(|v| !v.is_null()))
+            let ids: Vec<serde_json::Value> = rows
+                .iter()
+                .filter_map(|row| extract_pk(row, pk_col))
                 .collect();
 
             debug!(
@@ -217,8 +204,6 @@ pub async fn execute_insert_returning_in_transaction(
             Ok(ids)
         }
         DbConn::MySql(conn) => {
-            // MySQL: Execute INSERT, then compute ID range from last_insert_id
-            // Note: MySQL doesn't support RETURNING, so we can only get numeric auto-increment IDs
             let query = bind_mysql(sqlx::query(sql), params)?;
             let result = query
                 .execute(conn.as_mut())
@@ -228,7 +213,6 @@ pub async fn execute_insert_returning_in_transaction(
             let rows_affected = result.rows_affected() as i64;
             let last_id = result.last_insert_id() as i64;
 
-            // MySQL last_insert_id() returns the FIRST auto-generated ID
             let ids: Vec<serde_json::Value> = if rows_affected > 0 && last_id > 0 {
                 (last_id..last_id + rows_affected)
                     .map(|id| serde_json::Value::Number(serde_json::Number::from(id)))
@@ -247,7 +231,6 @@ pub async fn execute_insert_returning_in_transaction(
             Ok(ids)
         }
         DbConn::Sqlite(conn) => {
-            // SQLite: Try RETURNING first (SQLite 3.35+), fallback to last_insert_rowid
             let has_returning = sql.to_uppercase().contains("RETURNING");
             let returning_sql = if has_returning {
                 sql.to_string()
@@ -259,11 +242,9 @@ pub async fn execute_insert_returning_in_transaction(
 
             match query.fetch_all(conn.as_mut()).await {
                 Ok(rows) => {
-                    // RETURNING is supported - extract PK values using batch row conversion
-                    let row_maps = convert_sqlite_rows(rows);
-                    let ids: Vec<serde_json::Value> = row_maps
-                        .into_iter()
-                        .filter_map(|row_map| row_map.get(pk_col).cloned().filter(|v| !v.is_null()))
+                    let ids: Vec<serde_json::Value> = rows
+                        .iter()
+                        .filter_map(|row| extract_pk(row, pk_col))
                         .collect();
 
                     debug!(
@@ -274,10 +255,8 @@ pub async fn execute_insert_returning_in_transaction(
                     Ok(ids)
                 }
                 Err(_) => {
-                    // RETURNING not supported - fallback to last_insert_rowid (only works for INTEGER PK)
                     warn!(
-                        "SQLite RETURNING not supported (version < 3.35), falling back to last_insert_rowid. \
-                        This only works for INTEGER PRIMARY KEY and may produce incorrect IDs with concurrent inserts."
+                        "SQLite RETURNING not supported (version < 3.35), falling back to last_insert_rowid."
                     );
 
                     let query = bind_sqlite(sqlx::query(sql), params)?;

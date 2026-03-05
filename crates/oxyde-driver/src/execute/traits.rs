@@ -9,10 +9,9 @@ use std::collections::HashMap;
 
 use crate::bind::{bind_mysql, bind_postgres, bind_sqlite};
 use crate::convert::encoder::{encode_mutation_returning, encode_rows_columnar};
-use crate::convert::mysql_enc::MySqlEncoder;
-use crate::convert::postgres_enc::PgEncoder;
-use crate::convert::sqlite_enc::SqliteEncoder;
-use crate::convert::{convert_mysql_rows_typed, convert_pg_rows_typed, convert_sqlite_rows_typed};
+use crate::convert::mysql::MySqlEncoder;
+use crate::convert::postgres::PgEncoder;
+use crate::convert::sqlite::SqliteEncoder;
 use crate::error::{DriverError, Result};
 use crate::pool::DbPool;
 use crate::transaction::DbConn;
@@ -30,14 +29,6 @@ fn stmt_err(e: sqlx::Error) -> DriverError {
 /// Uses `&self` because sqlx pools are internally reference-counted.
 #[async_trait]
 pub trait PoolExec {
-    /// Execute a SELECT query and return rows as HashMaps
-    async fn query(
-        &self,
-        sql: &str,
-        params: &[Value],
-        col_types: Option<&HashMap<String, String>>,
-    ) -> Result<Vec<HashMap<String, serde_json::Value>>>;
-
     /// Execute a SELECT query and return pre-encoded msgpack bytes + row count.
     async fn query_columnar(
         &self,
@@ -65,14 +56,6 @@ pub trait PoolExec {
 /// Uses `&mut self` because sqlx connections require mutable access.
 #[async_trait]
 pub trait ConnExec {
-    /// Execute a SELECT query and return rows as HashMaps
-    async fn query(
-        &mut self,
-        sql: &str,
-        params: &[Value],
-        col_types: Option<&HashMap<String, String>>,
-    ) -> Result<Vec<HashMap<String, serde_json::Value>>>;
-
     /// Execute a SELECT query and return pre-encoded msgpack bytes + row count.
     async fn query_columnar(
         &mut self,
@@ -99,31 +82,6 @@ pub trait ConnExec {
 
 #[async_trait]
 impl PoolExec for DbPool {
-    async fn query(
-        &self,
-        sql: &str,
-        params: &[Value],
-        col_types: Option<&HashMap<String, String>>,
-    ) -> Result<Vec<HashMap<String, serde_json::Value>>> {
-        match self {
-            DbPool::Postgres(pool) => {
-                let query = bind_postgres(sqlx::query(sql), params)?;
-                let rows = query.fetch_all(pool).await.map_err(exec_err)?;
-                Ok(convert_pg_rows_typed(rows, col_types))
-            }
-            DbPool::MySql(pool) => {
-                let query = bind_mysql(sqlx::query(sql), params)?;
-                let rows = query.fetch_all(pool).await.map_err(exec_err)?;
-                Ok(convert_mysql_rows_typed(rows, col_types))
-            }
-            DbPool::Sqlite(pool) => {
-                let query = bind_sqlite(sqlx::query(sql), params)?;
-                let rows = query.fetch_all(pool).await.map_err(exec_err)?;
-                Ok(convert_sqlite_rows_typed(rows, col_types))
-            }
-        }
-    }
-
     async fn query_columnar(
         &self,
         sql: &str,
@@ -209,31 +167,6 @@ impl PoolExec for DbPool {
 
 #[async_trait]
 impl ConnExec for DbConn {
-    async fn query(
-        &mut self,
-        sql: &str,
-        params: &[Value],
-        col_types: Option<&HashMap<String, String>>,
-    ) -> Result<Vec<HashMap<String, serde_json::Value>>> {
-        match self {
-            DbConn::Postgres(conn) => {
-                let query = bind_postgres(sqlx::query(sql), params)?;
-                let rows = query.fetch_all(conn.as_mut()).await.map_err(exec_err)?;
-                Ok(convert_pg_rows_typed(rows, col_types))
-            }
-            DbConn::MySql(conn) => {
-                let query = bind_mysql(sqlx::query(sql), params)?;
-                let rows = query.fetch_all(conn.as_mut()).await.map_err(exec_err)?;
-                Ok(convert_mysql_rows_typed(rows, col_types))
-            }
-            DbConn::Sqlite(conn) => {
-                let query = bind_sqlite(sqlx::query(sql), params)?;
-                let rows = query.fetch_all(conn.as_mut()).await.map_err(exec_err)?;
-                Ok(convert_sqlite_rows_typed(rows, col_types))
-            }
-        }
-    }
-
     async fn query_columnar(
         &mut self,
         sql: &str,
