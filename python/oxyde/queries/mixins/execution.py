@@ -129,47 +129,44 @@ class ExecutionMixin:
     async def fetch_models(self, client: SupportsExecute) -> list[Model]:
         """Execute query and return results as model instances.
 
-        Uses direct PyDict path (no msgpack) when available.
-        JOIN fields (author__id, author__name) are extracted and hydrated.
+        JOIN relations use Rust-side dedup encoding (3-element msgpack array).
         """
         # Get or create cached TypeAdapter (thread-safe)
         model_class = self.model_class
         if model_class not in _TYPE_ADAPTER_CACHE:
             with _TYPE_ADAPTER_LOCK:
-                # Double-check after acquiring lock
                 if model_class not in _TYPE_ADAPTER_CACHE:
                     _TYPE_ADAPTER_CACHE[model_class] = TypeAdapter(list[model_class])
 
         adapter = _TYPE_ADAPTER_CACHE[model_class]
 
-        # Use dedup batched execution for JOIN queries (saves ~38% memory)
-        if self._join_specs and hasattr(client, "execute_batched_dedup"):
-            result = await client.execute_batched_dedup(self.to_ir())
-            if result:
-                main_rows = result.get("main", [])
-                relations = result.get("relations", {})
+        result_bytes = await self.fetch_msgpack(client)
+        data = msgpack.unpackb(result_bytes, raw=False, strict_map_key=False)
 
-                # Validate main models
-                models = adapter.validate_python(main_rows)
-
-                # Hydrate relations from dedup format
-                if models and relations:
-                    self._hydrate_from_dedup(models, main_rows, relations)
-
-                if self._prefetch_paths:
-                    await self._run_prefetch(models, client)
-                return models
-            return []
-
-        # Fallback to regular fetch_rows for non-JOIN queries
-        rows = await self.fetch_rows(client)
-
-        # Validate main models (Pydantic ignores extra fields like author__id)
-        models = adapter.validate_python(rows)
-
-        # Hydrate JOIN relations if present (old path)
-        if self._join_specs and rows:
-            self._hydrate_from_columnar(models, rows)
+        if (
+            isinstance(data, (list, tuple))
+            and len(data) == 3
+            and self._join_specs
+            and isinstance(data[2], dict)
+        ):
+            # Dedup format: [main_columns, main_rows, relations_map]
+            main_columns, main_rows, relations_map = data
+            rows = [dict(zip(main_columns, row)) for row in main_rows]
+            models = adapter.validate_python(rows)
+            self._hydrate_from_dedup(models, relations_map)
+        elif (
+            isinstance(data, (list, tuple))
+            and len(data) == 2
+            and isinstance(data[0], list)
+            and (not data[0] or isinstance(data[0][0], str))
+        ):
+            # Columnar format: [columns, rows] (columns may be empty for 0 rows)
+            columns, row_values = data
+            rows = [dict(zip(columns, row)) for row in row_values]
+            models = adapter.validate_python(rows)
+        else:
+            rows = data if isinstance(data, list) else []
+            models = adapter.validate_python(rows)
 
         if self._prefetch_paths:
             await self._run_prefetch(models, client)
@@ -371,19 +368,16 @@ class ExecutionMixin:
 
     # --- Join hydration methods ---
 
-    def _hydrate_from_columnar(
+    def _hydrate_from_dedup(
         self,
         models: list[Model],
-        rows: list[dict[str, Any]],
+        relations_map: dict[str, Any],
     ) -> None:
-        """Hydrate joined relations from columnar format.
-
-        Extracts related model data from prefixed columns (e.g., author__id)
-        and creates related model instances, caching by PK to avoid duplicates.
+        """Hydrate joined relations from Rust dedup format.
 
         Args:
             models: Main model instances (already validated)
-            rows: Row dicts with both main and related columns
+            relations_map: {prefix: {columns, data, refs}} from Rust encoder
         """
         if not models or not self._join_specs:
             return
@@ -394,55 +388,39 @@ class ExecutionMixin:
             key=lambda spec: spec.path.count("__"),
         )
 
-        # Pre-compute prefixes and pk columns for each spec (avoid repeated string ops)
-        spec_meta = [
-            (spec, spec.result_prefix + "__", spec.result_prefix + "__id")
-            for spec in ordered_specs
-        ]
+        # Build lookup: result_prefix → spec
+        spec_by_prefix: dict[str, _JoinDescriptor] = {
+            spec.result_prefix: spec for spec in ordered_specs
+        }
 
-        # Pre-compute which columns belong to which spec (do once, not per row)
-        # This avoids O(rows * columns * specs) startswith checks
-        first_row = rows[0] if rows else {}
-        spec_columns: dict[str, list[str]] = {}
-        for spec, prefix, _ in spec_meta:
-            cols = [k for k in first_row.keys() if k.startswith(prefix)]
-            spec_columns[spec.path] = cols
+        for prefix, rel_data in relations_map.items():
+            spec = spec_by_prefix.get(prefix)
+            if spec is None:
+                continue
 
-        # Cache related models by (relation_path, pk) to reuse instances
-        related_cache: dict[tuple[str, Any], Model] = {}
+            columns = rel_data["columns"]
+            data = rel_data["data"]
+            refs = rel_data["refs"]
 
-        # Hydrate each model from its corresponding row
-        for model, row in zip(models, rows):
-            for spec, prefix, pk_col in spec_meta:
-                pk_value = row.get(pk_col)
-                cache_key = (spec.path, pk_value)
+            # Build pk → related instance cache
+            instance_cache: dict[Any, Model] = {}
+            for pk_val, row_values in data.items():
+                related_dict = dict(zip(columns, row_values))
+                instance_cache[pk_val] = spec.target_model(**related_dict)
 
-                # Check cache first - avoid creating duplicate instances
-                if pk_value is not None and cache_key in related_cache:
-                    parent = self._resolve_join_parent(model, spec.parent_path)
-                    if parent is not None:
-                        setattr(parent, spec.attr_name, related_cache[cache_key])
-                    continue
-
-                # Extract related model fields using pre-computed column list
-                cols = spec_columns[spec.path]
-                prefix_len = len(prefix)
-                related_data = {col[prefix_len:]: row[col] for col in cols}
-                has_data = any(v is not None for v in related_data.values())
-
-                # Find parent model for nested joins
+            # Assign to each model via refs
+            for model, ref_pk in zip(models, refs):
                 parent = self._resolve_join_parent(model, spec.parent_path)
                 if parent is None:
                     continue
-
-                # Create related instance or set None
-                if has_data:
-                    related_instance = spec.target_model(**related_data)
-                    if pk_value is not None:
-                        related_cache[cache_key] = related_instance
-                    setattr(parent, spec.attr_name, related_instance)
-                else:
+                if ref_pk is None:
                     setattr(parent, spec.attr_name, None)
+                else:
+                    instance = instance_cache.get(ref_pk)
+                    if instance is not None:
+                        setattr(parent, spec.attr_name, instance)
+                    else:
+                        setattr(parent, spec.attr_name, None)
 
     def _resolve_join_parent(
         self,
@@ -458,93 +436,6 @@ class ExecutionMixin:
             if current is None:
                 return None
         return current
-
-    def _hydrate_from_dedup(
-        self,
-        models: list[Model],
-        rows: list[dict[str, Any]],
-        relations: dict[str, dict[Any, dict[str, Any]]],
-    ) -> None:
-        """Hydrate joined relations from dedup format.
-
-        The dedup format stores each related entity once:
-        relations = {"user": {1: {"id": 1, "name": "Alice"}, 2: {...}}}
-
-        Args:
-            models: Main model instances (already validated)
-            rows: Main rows (contain FK columns like user_id)
-            relations: Dict of relation_path -> {pk: related_data}
-        """
-        if not models or not self._join_specs:
-            return
-
-        # Sort specs by depth (shallow first) for nested joins
-        ordered_specs = sorted(
-            self._join_specs,
-            key=lambda spec: spec.path.count("__"),
-        )
-
-        # Cache created model instances to reuse same object
-        related_cache: dict[tuple[str, Any], Model] = {}
-
-        for model, row in zip(models, rows):
-            # Track resolved PKs per path so nested specs can find their FK
-            resolved_pks: dict[str, Any] = {}
-
-            for spec in ordered_specs:
-                path = spec.path
-                rel_data = relations.get(path, {})
-
-                fk_col = spec.source_column  # e.g., "author_id" or "profile_id"
-
-                if spec.parent_path is None:
-                    # Direct join. FK is in the main row
-                    pk_value = row.get(fk_col)
-                else:
-                    # Nested join. FK is in the parent relation's data
-                    parent_pk = resolved_pks.get(spec.parent_path)
-                    if parent_pk is not None:
-                        parent_data = relations.get(spec.parent_path, {}).get(
-                            parent_pk, {}
-                        )
-                        pk_value = parent_data.get(fk_col)
-                    else:
-                        pk_value = None
-
-                if pk_value is None:
-                    # Null FK - set relation to None
-                    parent = self._resolve_join_parent(model, spec.parent_path)
-                    if parent is not None:
-                        setattr(parent, spec.attr_name, None)
-                    continue
-
-                # Track for nested specs that need this level's PK
-                resolved_pks[path] = pk_value
-
-                cache_key = (path, pk_value)
-
-                # Check if we already created this instance
-                if cache_key in related_cache:
-                    parent = self._resolve_join_parent(model, spec.parent_path)
-                    if parent is not None:
-                        setattr(parent, spec.attr_name, related_cache[cache_key])
-                    continue
-
-                # Get related data from dedup dict
-                related_row = rel_data.get(pk_value)
-                if related_row:
-                    # Create related model instance
-                    related_instance = spec.target_model(**related_row)
-                    related_cache[cache_key] = related_instance
-
-                    parent = self._resolve_join_parent(model, spec.parent_path)
-                    if parent is not None:
-                        setattr(parent, spec.attr_name, related_instance)
-                else:
-                    # No data found for this PK
-                    parent = self._resolve_join_parent(model, spec.parent_path)
-                    if parent is not None:
-                        setattr(parent, spec.attr_name, None)
 
     # --- Prefetch methods ---
 

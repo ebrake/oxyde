@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::time::Instant;
 use tracing::debug;
 
+use crate::convert::encoder::RelationInfo;
 use crate::error::{DriverError, Result};
 use crate::execute::traits::{ConnExec, PoolExec};
 use crate::{registry, transaction_registry};
@@ -47,6 +48,28 @@ pub async fn execute_query_columnar(
         );
     }
     Ok(results)
+}
+
+/// Execute a SELECT with JOIN dedup encoding.
+pub async fn execute_query_columnar_dedup(
+    pool_name: &str,
+    sql: &str,
+    params: &[Value],
+    col_types: Option<&HashMap<String, String>>,
+    relations: &[RelationInfo],
+) -> Result<(Vec<u8>, usize)> {
+    debug!(
+        "Executing columnar dedup query on '{}': {} ({} params, {} relations)",
+        pool_name,
+        sql,
+        params.len(),
+        relations.len()
+    );
+
+    let handle = registry().get(pool_name).await?;
+    let pool = handle.clone_pool();
+    pool.query_columnar_dedup(sql, params, col_types, relations)
+        .await
 }
 
 /// Execute a mutation with RETURNING clause, return pre-encoded msgpack map.
@@ -112,6 +135,33 @@ pub async fn execute_query_columnar_in_transaction(
         .as_mut()
         .ok_or(DriverError::TransactionClosed(tx_id))?;
     conn.query_columnar(sql, params, col_types).await
+}
+
+/// Execute SELECT with JOIN dedup in transaction.
+pub async fn execute_query_columnar_dedup_in_transaction(
+    tx_id: u64,
+    sql: &str,
+    params: &[Value],
+    col_types: Option<&HashMap<String, String>>,
+    relations: &[RelationInfo],
+) -> Result<(Vec<u8>, usize)> {
+    let registry = transaction_registry();
+    let arc = registry
+        .get(tx_id)
+        .await
+        .ok_or(DriverError::TransactionNotFound(tx_id))?;
+    let mut tx = arc.lock().await;
+    if !tx.is_active() {
+        return Err(DriverError::TransactionClosed(tx_id));
+    }
+    tx.update_activity();
+
+    let conn = tx
+        .conn
+        .as_mut()
+        .ok_or(DriverError::TransactionClosed(tx_id))?;
+    conn.query_columnar_dedup(sql, params, col_types, relations)
+        .await
 }
 
 /// Execute mutation+RETURNING in transaction, return pre-encoded msgpack map.

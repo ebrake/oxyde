@@ -351,7 +351,7 @@ class TestJoinRelations:
 
     @pytest.mark.asyncio
     async def test_join_hydrates_related_models(self):
-        """Test that join properly hydrates related models from columnar format."""
+        """Test that join properly hydrates related models from dedup format."""
 
         class Creator(Model):
             id: int | None = Field(default=None, db_pk=True)
@@ -368,13 +368,20 @@ class TestJoinRelations:
             class Meta:
                 is_table = True
 
-        # Columnar result format (as returned by Rust for all SELECT queries)
-        columnar_result = (
-            ["id", "title", "creator__id", "creator__email"],
-            [[1, "Story 1", 10, "author@example.com"]],
+        # Dedup format from Rust: [main_columns, main_rows, relations_map]
+        dedup_result = (
+            ["id", "title"],
+            [[1, "Story 1"]],
+            {
+                "creator": {
+                    "columns": ["id", "email"],
+                    "data": {10: [10, "author@example.com"]},
+                    "refs": [10],
+                }
+            },
         )
 
-        stub = StubExecuteClient([columnar_result])
+        stub = StubExecuteClient([dedup_result])
         stories = await Story.objects.join("creator").fetch_models(stub)
 
         assert len(stories) == 1
@@ -383,11 +390,11 @@ class TestJoinRelations:
 
     @pytest.mark.asyncio
     async def test_join_creates_separate_instances(self):
-        """Test that join creates separate related model instances per row.
+        """Test that join dedup shares instances for same PK.
 
-        Unlike deduplication, each row gets its own related model instance,
-        matching Tortoise/Django behavior. This is simpler and uses less
-        memory overall due to columnar format.
+        Rust encoder deduplicates related models by PK — rows with same
+        PK reference the same entry in data map, Python creates one instance
+        per unique PK.
         """
 
         class Publisher(Model):
@@ -405,19 +412,29 @@ class TestJoinRelations:
             class Meta:
                 is_table = True
 
-        # 5 books from 2 publishers - each row has full publisher data
-        columnar_result = (
-            ["id", "title", "publisher__id", "publisher__name"],
+        # Dedup format: 5 books from 2 publishers, deduped by Rust
+        dedup_result = (
+            ["id", "title"],
             [
-                [1, "Book 1", 1, "Penguin"],
-                [2, "Book 2", 1, "Penguin"],
-                [3, "Book 3", 1, "Penguin"],
-                [4, "Book 4", 2, "HarperCollins"],
-                [5, "Book 5", 2, "HarperCollins"],
+                [1, "Book 1"],
+                [2, "Book 2"],
+                [3, "Book 3"],
+                [4, "Book 4"],
+                [5, "Book 5"],
             ],
+            {
+                "publisher": {
+                    "columns": ["id", "name"],
+                    "data": {
+                        1: [1, "Penguin"],
+                        2: [2, "HarperCollins"],
+                    },
+                    "refs": [1, 1, 1, 2, 2],
+                }
+            },
         )
 
-        stub = StubExecuteClient([columnar_result])
+        stub = StubExecuteClient([dedup_result])
         books = await Book.objects.join("publisher").fetch_models(stub)
 
         assert len(books) == 5
@@ -426,7 +443,7 @@ class TestJoinRelations:
         assert books[0].publisher.name == "Penguin"
         assert books[3].publisher.name == "HarperCollins"
 
-        # Same publisher ID -> same instance (PK-based caching)
+        # Same publisher ID -> same instance (dedup from Rust)
         assert books[0].publisher is books[1].publisher  # Both have publisher_id=1
         assert books[0].publisher is books[2].publisher  # Also publisher_id=1
         assert books[3].publisher is books[4].publisher  # Both have publisher_id=2
@@ -735,159 +752,6 @@ class TestM2MPrefetchExecution:
         assert tag_names == {"python", "rust"}
 
 
-class TestDedupHydration:
-    """Test dedup format hydration for JOIN queries."""
-
-    @pytest.mark.asyncio
-    async def test_dedup_hydration_reuses_instances(self):
-        """Test that dedup format correctly hydrates and reuses related instances."""
-
-        class Author(Model):
-            id: int | None = Field(default=None, db_pk=True)
-            name: str = ""
-
-            class Meta:
-                is_table = True
-
-        class Article(Model):
-            id: int | None = Field(default=None, db_pk=True)
-            title: str = ""
-            author_id: int | None = None
-            author: Author | None = None
-
-            class Meta:
-                is_table = True
-
-        registered_tables()
-
-        class DedupStubClient:
-            """Stub that simulates execute_batched_dedup response."""
-
-            def __init__(self, dedup_result: dict):
-                self._result = dedup_result
-                self.calls: list = []
-
-            async def execute(self, ir: dict) -> bytes:
-                self.calls.append(ir)
-                return msgpack.packb([])
-
-            async def execute_batched_dedup(self, ir: dict) -> dict:
-                self.calls.append(ir)
-                return self._result
-
-        # Dedup format: main rows + deduplicated relations
-        dedup_result = {
-            "main": [
-                {"id": 1, "title": "Article 1", "author_id": 100},
-                {"id": 2, "title": "Article 2", "author_id": 100},
-                {"id": 3, "title": "Article 3", "author_id": 200},
-            ],
-            "relations": {
-                "author": {
-                    100: {"id": 100, "name": "Alice"},
-                    200: {"id": 200, "name": "Bob"},
-                }
-            },
-        }
-
-        stub = DedupStubClient(dedup_result)
-        articles = await Article.objects.join("author").fetch_models(stub)
-
-        assert len(articles) == 3
-
-        # Check hydration
-        assert articles[0].author is not None
-        assert articles[0].author.name == "Alice"
-        assert articles[2].author.name == "Bob"
-
-        # Check instance reuse - same author_id should be same instance
-        assert articles[0].author is articles[1].author
-
-    @pytest.mark.asyncio
-    async def test_nested_dedup_hydration(self):
-        """Test that nested JOINs hydrate correctly in dedup format."""
-
-        class Profile(Model):
-            id: int | None = Field(default=None, db_pk=True)
-            bio: str = ""
-
-            class Meta:
-                is_table = True
-
-        class Author(Model):
-            id: int | None = Field(default=None, db_pk=True)
-            name: str = ""
-            profile: Profile | None = None
-
-            class Meta:
-                is_table = True
-
-        class Post(Model):
-            id: int | None = Field(default=None, db_pk=True)
-            title: str = ""
-            author: Author | None = None
-
-            class Meta:
-                is_table = True
-
-        registered_tables()
-
-        class DedupStubClient:
-            """Stub that simulates execute_batched_dedup response."""
-
-            def __init__(self, dedup_result: dict):
-                self._result = dedup_result
-                self.calls: list = []
-
-            async def execute(self, ir: dict) -> bytes:
-                self.calls.append(ir)
-                return msgpack.packb([])
-
-            async def execute_batched_dedup(self, ir: dict) -> dict:
-                self.calls.append(ir)
-                return self._result
-
-        dedup_result = {
-            "main": [
-                {"id": 1, "title": "Post 1", "author_id": 10},
-                {"id": 2, "title": "Post 2", "author_id": 10},
-                {"id": 3, "title": "Post 3", "author_id": 20},
-            ],
-            "relations": {
-                "author": {
-                    10: {"id": 10, "name": "Alice", "profile_id": 100},
-                    20: {"id": 20, "name": "Bob", "profile_id": 200},
-                },
-                "author__profile": {
-                    100: {"id": 100, "bio": "Alice's bio"},
-                    200: {"id": 200, "bio": "Bob's bio"},
-                },
-            },
-        }
-
-        stub = DedupStubClient(dedup_result)
-        posts = await (
-            Post.objects.join("author").join("author__profile").fetch_models(stub)
-        )
-
-        assert len(posts) == 3
-
-        # First level: author hydrated correctly
-        assert posts[0].author is not None
-        assert posts[0].author.name == "Alice"
-        assert posts[2].author.name == "Bob"
-
-        # Second level: profile hydrated from author's data (NOT from Post row)
-        assert posts[0].author.profile is not None
-        assert posts[0].author.profile.bio == "Alice's bio"
-        assert posts[2].author.profile is not None
-        assert posts[2].author.profile.bio == "Bob's bio"
-
-        # Instance reuse across posts with same author
-        assert posts[0].author is posts[1].author
-        assert posts[0].author.profile is posts[1].author.profile
-
-
 class TestNestedJoinHydration:
     """Test nested JOIN hydration (multi-level)."""
 
@@ -920,20 +784,25 @@ class TestNestedJoinHydration:
 
         registered_tables()
 
-        # Columnar format with nested joins: user -> profile -> country
-        columnar_result = (
-            [
-                "id",
-                "name",
-                "profile__id",
-                "profile__bio",
-                "profile__country__id",
-                "profile__country__name",
-            ],
-            [[1, "Alice", 10, "Developer", 100, "USA"]],
+        # Dedup format with nested joins: user -> profile -> country
+        dedup_result = (
+            ["id", "name"],
+            [[1, "Alice"]],
+            {
+                "profile": {
+                    "columns": ["id", "bio"],
+                    "data": {10: [10, "Developer"]},
+                    "refs": [10],
+                },
+                "profile__country": {
+                    "columns": ["id", "name"],
+                    "data": {100: [100, "USA"]},
+                    "refs": [100],
+                },
+            },
         )
 
-        stub = StubExecuteClient([columnar_result])
+        stub = StubExecuteClient([dedup_result])
 
         # Build query with nested joins
         query = User.objects.join("profile").join("profile__country")

@@ -8,8 +8,10 @@ use oxyde_codec::QueryIR;
 use oxyde_driver::{
     execute_insert_returning, execute_insert_returning_in_transaction, execute_mutation_returning,
     execute_mutation_returning_in_transaction, execute_query_columnar,
+    execute_query_columnar_dedup, execute_query_columnar_dedup_in_transaction,
     execute_query_columnar_in_transaction, execute_statement, execute_statement_in_transaction,
     explain_query, pool_backend as driver_pool_backend, ExplainFormat, ExplainOptions,
+    RelationInfo,
 };
 use oxyde_query::{build_sql, Dialect};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -56,10 +58,28 @@ pub(crate) fn execute<'py>(
         let results = match ir.op {
             oxyde_codec::Operation::Select | oxyde_codec::Operation::Raw => {
                 let exec_start = Instant::now();
-                let (result, num_rows) =
+                let (result, num_rows) = if let Some(joins) = &ir.joins {
+                    let relations: Vec<RelationInfo> = joins
+                        .iter()
+                        .map(|j| RelationInfo {
+                            prefix: j.result_prefix.clone(),
+                            pk_col: format!("{}__{}", j.result_prefix, j.target_column),
+                        })
+                        .collect();
+                    execute_query_columnar_dedup(
+                        &pool_name,
+                        &sql,
+                        &params,
+                        ir.col_types.as_ref(),
+                        &relations,
+                    )
+                    .await
+                    .map_err(|e| PyErr::new::<PyRuntimeError, _>(e.to_string()))?
+                } else {
                     execute_query_columnar(&pool_name, &sql, &params, ir.col_types.as_ref())
                         .await
-                        .map_err(|e| PyErr::new::<PyRuntimeError, _>(e.to_string()))?;
+                        .map_err(|e| PyErr::new::<PyRuntimeError, _>(e.to_string()))?
+                };
                 let exec_us = exec_start.elapsed().as_micros();
 
                 if profile {
@@ -169,14 +189,33 @@ pub(crate) fn execute_in_transaction<'py>(
 
         let results = match ir.op {
             oxyde_codec::Operation::Select | oxyde_codec::Operation::Raw => {
-                let (result, _num_rows) = execute_query_columnar_in_transaction(
-                    tx_id,
-                    &sql,
-                    &params,
-                    ir.col_types.as_ref(),
-                )
-                .await
-                .map_err(|e| PyErr::new::<PyRuntimeError, _>(e.to_string()))?;
+                let (result, _num_rows) = if let Some(joins) = &ir.joins {
+                    let relations: Vec<RelationInfo> = joins
+                        .iter()
+                        .map(|j| RelationInfo {
+                            prefix: j.result_prefix.clone(),
+                            pk_col: format!("{}__{}", j.result_prefix, j.target_column),
+                        })
+                        .collect();
+                    execute_query_columnar_dedup_in_transaction(
+                        tx_id,
+                        &sql,
+                        &params,
+                        ir.col_types.as_ref(),
+                        &relations,
+                    )
+                    .await
+                    .map_err(|e| PyErr::new::<PyRuntimeError, _>(e.to_string()))?
+                } else {
+                    execute_query_columnar_in_transaction(
+                        tx_id,
+                        &sql,
+                        &params,
+                        ir.col_types.as_ref(),
+                    )
+                    .await
+                    .map_err(|e| PyErr::new::<PyRuntimeError, _>(e.to_string()))?
+                };
                 result
             }
             oxyde_codec::Operation::Insert => {

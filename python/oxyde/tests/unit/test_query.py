@@ -577,13 +577,19 @@ async def test_join_hydrates_related_models() -> None:
         class Meta:
             is_table = True
 
-    # Columnar result format (as returned by Rust for all SELECT queries)
-    # Columns include both main model fields and joined fields with prefix
-    columnar_result = (
-        ["id", "title", "author__id", "author__email"],
-        [[1, "First", 10, "ada@example.com"]],
+    # Dedup format from Rust: [main_columns, main_rows, relations_map]
+    dedup_result = (
+        ["id", "title"],
+        [[1, "First"]],
+        {
+            "author": {
+                "columns": ["id", "email"],
+                "data": {10: [10, "ada@example.com"]},
+                "refs": [10],
+            }
+        },
     )
-    stub = StubExecuteClient([columnar_result])
+    stub = StubExecuteClient([dedup_result])
     posts = await Post.objects.join("author").fetch_models(stub)
     assert posts[0].author is not None
     assert posts[0].author.email == "ada@example.com"

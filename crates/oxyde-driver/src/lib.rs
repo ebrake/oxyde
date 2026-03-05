@@ -152,8 +152,12 @@ pub use transaction::api::{
 // Query / statement execution
 pub use execute::query::{
     execute_mutation_returning, execute_mutation_returning_in_transaction, execute_query_columnar,
+    execute_query_columnar_dedup, execute_query_columnar_dedup_in_transaction,
     execute_query_columnar_in_transaction, execute_statement, execute_statement_in_transaction,
 };
+
+// Encoder types needed by callers
+pub use convert::encoder::RelationInfo;
 
 // INSERT RETURNING
 pub use execute::insert::{execute_insert_returning, execute_insert_returning_in_transaction};

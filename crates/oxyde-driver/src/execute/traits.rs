@@ -8,7 +8,9 @@ use sea_query::Value;
 use std::collections::HashMap;
 
 use crate::bind::{bind_mysql, bind_postgres, bind_sqlite};
-use crate::convert::encoder::{encode_mutation_returning, encode_rows_columnar};
+use crate::convert::encoder::{
+    encode_mutation_returning, encode_rows_columnar, encode_rows_dedup, RelationInfo,
+};
 use crate::convert::mysql::MySqlEncoder;
 use crate::convert::postgres::PgEncoder;
 use crate::convert::sqlite::SqliteEncoder;
@@ -37,6 +39,15 @@ pub trait PoolExec {
         col_types: Option<&HashMap<String, String>>,
     ) -> Result<(Vec<u8>, usize)>;
 
+    /// Execute a SELECT with JOIN dedup encoding.
+    async fn query_columnar_dedup(
+        &self,
+        sql: &str,
+        params: &[Value],
+        col_types: Option<&HashMap<String, String>>,
+        relations: &[RelationInfo],
+    ) -> Result<(Vec<u8>, usize)>;
+
     /// Execute a mutation with RETURNING clause, return pre-encoded msgpack map.
     async fn query_mutation_returning(
         &self,
@@ -62,6 +73,15 @@ pub trait ConnExec {
         sql: &str,
         params: &[Value],
         col_types: Option<&HashMap<String, String>>,
+    ) -> Result<(Vec<u8>, usize)>;
+
+    /// Execute a SELECT with JOIN dedup encoding.
+    async fn query_columnar_dedup(
+        &mut self,
+        sql: &str,
+        params: &[Value],
+        col_types: Option<&HashMap<String, String>>,
+        relations: &[RelationInfo],
     ) -> Result<(Vec<u8>, usize)>;
 
     /// Execute a mutation with RETURNING clause, return pre-encoded msgpack map.
@@ -103,6 +123,36 @@ impl PoolExec for DbPool {
                 let query = bind_sqlite(sqlx::query(sql), params)?;
                 let rows = query.fetch_all(pool).await.map_err(exec_err)?;
                 Ok(encode_rows_columnar::<SqliteEncoder>(&rows, col_types))
+            }
+        }
+    }
+
+    async fn query_columnar_dedup(
+        &self,
+        sql: &str,
+        params: &[Value],
+        col_types: Option<&HashMap<String, String>>,
+        relations: &[RelationInfo],
+    ) -> Result<(Vec<u8>, usize)> {
+        match self {
+            DbPool::Postgres(pool) => {
+                let query = bind_postgres(sqlx::query(sql), params)?;
+                let rows = query.fetch_all(pool).await.map_err(exec_err)?;
+                Ok(encode_rows_dedup::<PgEncoder>(&rows, col_types, relations))
+            }
+            DbPool::MySql(pool) => {
+                let query = bind_mysql(sqlx::query(sql), params)?;
+                let rows = query.fetch_all(pool).await.map_err(exec_err)?;
+                Ok(encode_rows_dedup::<MySqlEncoder>(
+                    &rows, col_types, relations,
+                ))
+            }
+            DbPool::Sqlite(pool) => {
+                let query = bind_sqlite(sqlx::query(sql), params)?;
+                let rows = query.fetch_all(pool).await.map_err(exec_err)?;
+                Ok(encode_rows_dedup::<SqliteEncoder>(
+                    &rows, col_types, relations,
+                ))
             }
         }
     }
@@ -188,6 +238,36 @@ impl ConnExec for DbConn {
                 let query = bind_sqlite(sqlx::query(sql), params)?;
                 let rows = query.fetch_all(conn.as_mut()).await.map_err(exec_err)?;
                 Ok(encode_rows_columnar::<SqliteEncoder>(&rows, col_types))
+            }
+        }
+    }
+
+    async fn query_columnar_dedup(
+        &mut self,
+        sql: &str,
+        params: &[Value],
+        col_types: Option<&HashMap<String, String>>,
+        relations: &[RelationInfo],
+    ) -> Result<(Vec<u8>, usize)> {
+        match self {
+            DbConn::Postgres(conn) => {
+                let query = bind_postgres(sqlx::query(sql), params)?;
+                let rows = query.fetch_all(conn.as_mut()).await.map_err(exec_err)?;
+                Ok(encode_rows_dedup::<PgEncoder>(&rows, col_types, relations))
+            }
+            DbConn::MySql(conn) => {
+                let query = bind_mysql(sqlx::query(sql), params)?;
+                let rows = query.fetch_all(conn.as_mut()).await.map_err(exec_err)?;
+                Ok(encode_rows_dedup::<MySqlEncoder>(
+                    &rows, col_types, relations,
+                ))
+            }
+            DbConn::Sqlite(conn) => {
+                let query = bind_sqlite(sqlx::query(sql), params)?;
+                let rows = query.fetch_all(conn.as_mut()).await.map_err(exec_err)?;
+                Ok(encode_rows_dedup::<SqliteEncoder>(
+                    &rows, col_types, relations,
+                ))
             }
         }
     }
