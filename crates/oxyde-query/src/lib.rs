@@ -481,4 +481,59 @@ mod tests {
         assert!(sql.contains("$2"), "should have $2: {sql}");
         assert_eq!(params.len(), 2);
     }
+
+    #[test]
+    fn test_count_distinct() {
+        let ir = QueryIR {
+            table: "users".into(),
+            aggregates: Some(vec![oxyde_codec::Aggregate {
+                op: oxyde_codec::AggregateOp::Count,
+                field: Some("email".into()),
+                alias: Some("unique_emails".into()),
+                distinct: Some(true),
+            }]),
+            ..Default::default()
+        };
+        let (sql, _) = build_sql(&ir, Dialect::Postgres).unwrap();
+        assert!(
+            sql.contains("COUNT(DISTINCT"),
+            "should have COUNT(DISTINCT: {sql}"
+        );
+        assert!(sql.contains("unique_emails"), "should have alias: {sql}");
+    }
+
+    #[test]
+    fn test_sum_distinct() {
+        let ir = QueryIR {
+            table: "orders".into(),
+            aggregates: Some(vec![oxyde_codec::Aggregate {
+                op: oxyde_codec::AggregateOp::Sum,
+                field: Some("amount".into()),
+                alias: Some("unique_total".into()),
+                distinct: Some(true),
+            }]),
+            ..Default::default()
+        };
+        let (sql, _) = build_sql(&ir, Dialect::Sqlite).unwrap();
+        assert!(
+            sql.contains("SUM(DISTINCT"),
+            "should have SUM(DISTINCT: {sql}"
+        );
+    }
+
+    #[test]
+    fn test_count_without_distinct() {
+        let ir = QueryIR {
+            table: "users".into(),
+            aggregates: Some(vec![oxyde_codec::Aggregate {
+                op: oxyde_codec::AggregateOp::Count,
+                field: Some("email".into()),
+                alias: Some("total".into()),
+                distinct: None,
+            }]),
+            ..Default::default()
+        };
+        let (sql, _) = build_sql(&ir, Dialect::Postgres).unwrap();
+        assert!(!sql.contains("DISTINCT"), "should NOT have DISTINCT: {sql}");
+    }
 }

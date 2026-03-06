@@ -133,6 +133,8 @@ pub struct Aggregate {
     pub field: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub distinct: Option<bool>,
 }
 
 /// Lock type for pessimistic locking
