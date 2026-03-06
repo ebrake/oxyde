@@ -728,7 +728,7 @@ class Model(BaseModel, metaclass=OxydeModelMeta):
 
             # Use Manager.filter().update() for updating (returns list of updated rows)
             rows = await manager.filter(**{pk_field: pk_value}).update(
-                client=client, using=using, **values
+                returning=True, client=client, using=using, **values
             )
             if not rows:
                 cls_name = self.__class__.__name__

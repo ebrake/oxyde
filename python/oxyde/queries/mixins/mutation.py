@@ -78,24 +78,30 @@ class MutationMixin:
     async def update(
         self,
         *,
+        returning: bool = False,
         using: str | None = None,
         client: SupportsExecute | None = None,
         **values: Any,
-    ) -> list[dict[str, Any]]:
+    ) -> int | list[dict[str, Any]]:
         """
         Update records matching the query.
 
         Args:
+            returning: If True, return updated rows as dicts (RETURNING *).
+                Default False — returns number of affected rows (Django-compatible).
             using: Database alias
             client: Optional database client
             **values: Field values to update
 
         Returns:
-            List of updated rows as dicts (with all fields from RETURNING *)
+            Number of affected rows (default), or list of updated row dicts
+            if returning=True.
 
         Examples:
-            rows = await Post.objects.filter(id=42).update(status="published")
-            rows = await User.objects.filter(is_active=False).update(status="archived")
+            count = await Post.objects.filter(id=42).update(status="published")
+            rows = await Post.objects.filter(id=42).update(
+                status="published", returning=True
+            )
         """
         exec_client = await _resolve_execution_client(using, client)
         col_types = _build_col_types(self.model_class)
@@ -109,14 +115,15 @@ class MutationMixin:
             filter_tree=self._build_filter_tree(),
             col_types=col_types,
             model=_model_key(self.model_class),
-            returning=True,
+            returning=returning,
         )
         result_bytes = await exec_client.execute(update_ir)
         result = msgpack.unpackb(result_bytes, raw=False)
-        # Convert columnar format to list of dicts
-        columns = result.get("columns", [])
-        rows = result.get("rows", [])
-        return [dict(zip(columns, row)) for row in rows]
+        if returning:
+            columns = result.get("columns", [])
+            rows = result.get("rows", [])
+            return [dict(zip(columns, row)) for row in rows]
+        return result.get("affected", 0)
 
     async def delete(
         self,

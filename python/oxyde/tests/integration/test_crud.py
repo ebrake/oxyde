@@ -180,7 +180,7 @@ class TestUpdate:
         result = await Post.objects.filter(published=True).update(
             views=0, client=db
         )
-        assert len(result) == 4  # 4 published posts
+        assert result == 4  # 4 published posts
 
         post = await Post.objects.get(id=1, client=db)
         assert post.views == 0

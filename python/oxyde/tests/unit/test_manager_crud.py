@@ -468,17 +468,14 @@ class TestManagerUpdate:
     @pytest.mark.asyncio
     async def test_filter_update(self):
         """Test update() through filter."""
-        stub = StubExecuteClient([{
-            "columns": ["id", "name", "age"],
-            "rows": [[1, "a", 25], [2, "b", 25], [3, "c", 25]]
-        }])
+        stub = StubExecuteClient([{"affected": 3}])
 
         # update() takes keyword arguments, not positional dict
-        rows = await OxydeTestModel.objects.filter(is_active=True).update(
+        result = await OxydeTestModel.objects.filter(is_active=True).update(
             age=25, client=stub
         )
 
-        assert len(rows) == 3
+        assert result == 3
         assert stub.calls[0]["op"] == "update"
 
 

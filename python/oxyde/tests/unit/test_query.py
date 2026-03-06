@@ -396,15 +396,12 @@ async def test_async_manager_create_update_delete_and_save() -> None:
     assert update_stub.calls[0]["values"]["name"] == "Gadget"
     assert update_stub.calls[0]["values"]["price"] == 5
 
-    update_count_stub = StubExecuteClient([{
-        "columns": ["id", "name", "price"],
-        "rows": [[1, "a", 100], [2, "b", 100], [3, "c", 100]]
-    }])
-    rows = await Item.objects.filter(name__icontains="gad").update(
+    update_count_stub = StubExecuteClient([{"affected": 3}])
+    result = await Item.objects.filter(name__icontains="gad").update(
         price=100,
         client=update_count_stub,
     )
-    assert len(rows) == 3
+    assert result == 3
     assert update_count_stub.calls[0]["op"] == "update"
 
     delete_stub = StubExecuteClient([{"affected": 2}])
