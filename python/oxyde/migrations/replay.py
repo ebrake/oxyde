@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import importlib.util
 from pathlib import Path
 from typing import Any
 
 from oxyde.migrations.context import MigrationContext
+from oxyde.migrations.utils import load_migration_module
 
 
 class SchemaState:
@@ -83,7 +83,7 @@ class SchemaState:
                     if field["name"] == column_name:
                         # Map changes keys to field keys
                         if "type" in changes:
-                            field["field_type"] = changes["type"]
+                            field["python_type"] = changes["type"]
                         if "python_type" in changes:
                             field["python_type"] = changes["python_type"]
                         if "db_type" in changes:
@@ -159,24 +159,6 @@ class SchemaState:
         }
 
 
-def _load_migration_module(file: Path) -> Any:
-    """Load a migration module from file.
-
-    Args:
-        file: Path to migration file
-
-    Returns:
-        Loaded module or None if loading failed
-    """
-    spec = importlib.util.spec_from_file_location(file.stem, file)
-    if spec is None or spec.loader is None:
-        return None
-
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 def _get_migration_dependency(module: Any) -> str | None:
     """Get the depends_on value from a migration module.
 
@@ -206,7 +188,7 @@ def _topological_sort_migrations(
     # Build dependency graph
     modules: dict[str, tuple[Path, Any]] = {}
     for file in migration_files:
-        module = _load_migration_module(file)
+        module = load_migration_module(file)
         if module is not None:
             modules[file.stem] = (file, module)
 
@@ -266,7 +248,7 @@ def replay_migrations(migrations_dir: str = "migrations") -> dict[str, Any]:
     sorted_files = _topological_sort_migrations(migration_files)
 
     for file in sorted_files:
-        module = _load_migration_module(file)
+        module = load_migration_module(file)
         if module is None:
             continue
 

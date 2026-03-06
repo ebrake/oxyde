@@ -223,7 +223,8 @@ class MigrationContext:
             # Fallback: create minimal field definition
             old_field = {
                 "name": field_name,
-                "field_type": changes.get("type", "TEXT"),
+                "python_type": changes.get("type", "str"),
+                "db_type": None,
                 "nullable": True,
                 "primary_key": False,
                 "unique": False,
@@ -234,7 +235,11 @@ class MigrationContext:
         # Build new_field by applying changes to old_field
         new_field = dict(old_field)
         if "type" in changes:
-            new_field["field_type"] = changes["type"]
+            new_field["python_type"] = changes["type"]
+        if "python_type" in changes:
+            new_field["python_type"] = changes["python_type"]
+        if "db_type" in changes:
+            new_field["db_type"] = changes["db_type"]
         if "nullable" in changes:
             new_field["nullable"] = changes["nullable"]
         if "default" in changes:

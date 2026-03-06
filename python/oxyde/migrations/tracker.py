@@ -4,10 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import msgpack
-
 from oxyde.core.ir import build_raw_sql_ir
 from oxyde.db.registry import get_connection as _get_connection_async
+from oxyde.migrations.utils import detect_dialect, parse_query_result
 
 MIGRATIONS_TABLE = "oxyde_migrations"
 
@@ -20,14 +19,7 @@ async def ensure_migrations_table(db_alias: str = "default") -> None:
     """
     db_conn = await _get_connection_async(db_alias)
 
-    # Determine dialect from connection URL
-    dialect = "postgres"  # default
-    if db_conn.url:
-        url_lower = db_conn.url.lower()
-        if "sqlite" in url_lower:
-            dialect = "sqlite"
-        elif "mysql" in url_lower or "mariadb" in url_lower:
-            dialect = "mysql"
+    dialect = detect_dialect(db_conn.url)
 
     # Generate dialect-specific SQL
     if dialect == "sqlite":
@@ -83,35 +75,8 @@ async def get_applied_migrations(db_alias: str = "default") -> list[str]:
 
     query_ir = build_raw_sql_ir(sql=query_sql)
     result_bytes = await db_conn.execute(query_ir)
-
-    # Result comes as MessagePack bytes (from serialize_results)
-    # Format: [columns, rows] where rows is list of lists
-    result = msgpack.unpackb(result_bytes, raw=False)
-
-    # Extract migration names from results
-    migrations = []
-
-    # Result format: [columns, rows] or list of dicts
-    if isinstance(result, list) and len(result) == 2:
-        columns, rows = result
-        # Find 'name' column index
-        if isinstance(columns, list) and isinstance(rows, list):
-            try:
-                name_idx = columns.index("name") if columns else 0
-            except ValueError:
-                name_idx = 0
-            for row in rows:
-                if isinstance(row, (list, tuple)) and len(row) > name_idx:
-                    migrations.append(row[name_idx])
-    else:
-        # Fallback: list of dicts or other format
-        for row in result:
-            if isinstance(row, dict):
-                migrations.append(row.get("name", ""))
-            elif isinstance(row, (list, tuple)) and row:
-                migrations.append(row[0])
-
-    return migrations
+    rows = parse_query_result(result_bytes)
+    return [row["name"] for row in rows if "name" in row]
 
 
 async def record_migration(name: str, db_alias: str = "default") -> None:
@@ -125,14 +90,7 @@ async def record_migration(name: str, db_alias: str = "default") -> None:
 
     db_conn = await _get_connection_async(db_alias)
 
-    # Determine dialect from connection URL
-    dialect = "postgres"
-    if db_conn.url:
-        url_lower = db_conn.url.lower()
-        if "sqlite" in url_lower:
-            dialect = "sqlite"
-        elif "mysql" in url_lower or "mariadb" in url_lower:
-            dialect = "mysql"
+    dialect = detect_dialect(db_conn.url)
 
     # Insert migration record with dialect-specific SQL
     if dialect == "postgres":
@@ -171,14 +129,7 @@ async def remove_migration(name: str, db_alias: str = "default") -> None:
     """
     db_conn = await _get_connection_async(db_alias)
 
-    # Determine dialect from connection URL
-    dialect = "postgres"
-    if db_conn.url:
-        url_lower = db_conn.url.lower()
-        if "sqlite" in url_lower:
-            dialect = "sqlite"
-        elif "mysql" in url_lower or "mariadb" in url_lower:
-            dialect = "mysql"
+    dialect = detect_dialect(db_conn.url)
 
     if dialect == "postgres":
         delete_sql = f"""

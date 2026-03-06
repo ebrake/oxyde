@@ -1,11 +1,35 @@
-//! SQL generation: type mapping, column definitions, and MigrationOp::to_sql().
+//! SQL generation using sea-query DDL builders.
+//!
+//! Type mapping (`python_type_to_sql`, `translate_db_type`, `resolve_field_type`) is
+//! hand-written — sea-query doesn't know about Python types. DDL structure
+//! (CREATE/ALTER/DROP TABLE, indexes, foreign keys) uses sea-query for
+//! dialect-specific syntax and identifier quoting.
+
+use sea_query::{
+    Alias, ColumnDef as SeaColumnDef, Expr, ForeignKey as SeaForeignKey,
+    ForeignKeyAction as SeaFkAction, Index as SeaIndex, IndexType, IntoIden, MysqlQueryBuilder,
+    PostgresQueryBuilder, SqliteQueryBuilder, Table as SeaTable,
+};
 
 use crate::op::MigrationOp;
 use crate::types::{CheckDef, Dialect, FieldDef, ForeignKeyDef, IndexDef, MigrateError, Result};
 
+/// Build SQL string from a sea-query schema statement for the given dialect.
+macro_rules! build_sql {
+    ($stmt:expr, $dialect:expr) => {
+        match $dialect {
+            Dialect::Sqlite => $stmt.build(SqliteQueryBuilder),
+            Dialect::Postgres => $stmt.build(PostgresQueryBuilder),
+            Dialect::Mysql => $stmt.build(MysqlQueryBuilder),
+        }
+    };
+}
+
+// ── Type mapping ────────────────────────────────────────────────────────────
+
 /// Generate SQL type from Python type name for a given dialect.
 ///
-/// This is used when db_type is not explicitly specified by the user.
+/// Used when `db_type` is not explicitly specified by the user.
 pub(crate) fn python_type_to_sql(python_type: &str, dialect: Dialect, is_pk: bool) -> String {
     match dialect {
         Dialect::Sqlite => match python_type {
@@ -77,49 +101,109 @@ pub(crate) fn translate_db_type(db_type: &str, dialect: Dialect) -> String {
 /// Resolve the SQL type for a field based on dialect.
 ///
 /// Priority:
-/// 1. If db_type is set (user explicit) → translate for dialect
-/// 2. Generate from python_type for dialect
+/// 1. If `db_type` is set (user explicit) → translate for dialect
+/// 2. Generate from `python_type` for dialect
 fn resolve_field_type(field: &FieldDef, dialect: Dialect) -> String {
-    // 1. Explicit db_type from user - translate if needed
     if let Some(db_type) = &field.db_type {
         return translate_db_type(db_type, dialect);
     }
-
-    // 2. Generate from python_type
     python_type_to_sql(&field.python_type, dialect, field.primary_key)
 }
 
-/// Build column definition from FieldDef for any dialect
-fn build_column_def(field: &FieldDef, dialect: Dialect) -> String {
-    let sql_type = resolve_field_type(field, dialect);
-    let mut col_def = format!("{} {}", field.name, sql_type);
+// ── sea-query helpers ───────────────────────────────────────────────────────
 
-    if field.primary_key {
-        col_def.push_str(" PRIMARY KEY");
+/// Convert `FieldDef` to sea-query `ColumnDef` with dialect-appropriate type and constraints.
+fn field_to_column_def(field: &FieldDef, dialect: Dialect) -> SeaColumnDef {
+    let sql_type = resolve_field_type(field, dialect);
+    let mut col = SeaColumnDef::new(Alias::new(&field.name));
+    col.custom(Alias::new(sql_type));
+
+    // SQLite requires "PRIMARY KEY AUTOINCREMENT" in that exact order.
+    // sea-query's .extra() renders before .primary_key(), so for this case
+    // we emit both keywords via .extra() and skip .primary_key().
+    let sqlite_autoincrement =
+        field.primary_key && field.auto_increment && dialect == Dialect::Sqlite;
+
+    if field.primary_key && !sqlite_autoincrement {
+        col.primary_key();
     }
 
-    // Handle auto_increment per dialect
     if field.auto_increment {
         match dialect {
             Dialect::Sqlite => {
                 if field.primary_key {
-                    col_def.push_str(" AUTOINCREMENT");
+                    col.extra("PRIMARY KEY AUTOINCREMENT");
                 }
             }
-            Dialect::Mysql => col_def.push_str(" AUTO_INCREMENT"),
-            // Postgres uses SERIAL/BIGSERIAL types, no separate keyword needed
-            Dialect::Postgres => {}
+            Dialect::Mysql => {
+                col.extra("AUTO_INCREMENT");
+            }
+            Dialect::Postgres => {} // SERIAL type handles auto-increment
         }
     }
 
     if !field.nullable && !field.primary_key {
-        col_def.push_str(" NOT NULL");
+        col.not_null();
     }
 
     if field.unique && !field.primary_key {
-        col_def.push_str(" UNIQUE");
+        col.unique_key();
     }
 
+    if let Some(default) = &field.default {
+        col.default(Expr::cust(default));
+    }
+
+    col
+}
+
+/// Parse FK action string to sea-query `ForeignKeyAction`.
+fn parse_fk_action(action: Option<&str>) -> SeaFkAction {
+    match action.unwrap_or("NO ACTION").to_uppercase().as_str() {
+        "CASCADE" => SeaFkAction::Cascade,
+        "SET NULL" => SeaFkAction::SetNull,
+        "SET DEFAULT" => SeaFkAction::SetDefault,
+        "RESTRICT" => SeaFkAction::Restrict,
+        _ => SeaFkAction::NoAction,
+    }
+}
+
+/// Build a sea-query `ForeignKeyCreateStatement` from `ForeignKeyDef`.
+fn build_fk_stmt(table: &str, fk: &ForeignKeyDef) -> sea_query::ForeignKeyCreateStatement {
+    let mut stmt = SeaForeignKey::create();
+    stmt.name(&fk.name)
+        .from_tbl(Alias::new(table))
+        .to_tbl(Alias::new(&fk.ref_table))
+        .on_delete(parse_fk_action(fk.on_delete.as_deref()))
+        .on_update(parse_fk_action(fk.on_update.as_deref()));
+    for col in &fk.columns {
+        stmt.from_col(Alias::new(col));
+    }
+    for col in &fk.ref_columns {
+        stmt.to_col(Alias::new(col));
+    }
+    stmt
+}
+
+/// Build a MySQL column definition string (backtick-quoted name + type + constraints).
+///
+/// Used by both `RenameColumn` (CHANGE) and `AlterColumn` (MODIFY COLUMN).
+fn mysql_column_def(field: &FieldDef) -> String {
+    let sql_type = resolve_field_type(field, Dialect::Mysql);
+    let mut col_def = format!("`{}` {}", field.name, sql_type);
+
+    if field.primary_key {
+        col_def.push_str(" PRIMARY KEY");
+    }
+    if field.auto_increment {
+        col_def.push_str(" AUTO_INCREMENT");
+    }
+    if !field.nullable && !field.primary_key {
+        col_def.push_str(" NOT NULL");
+    }
+    if field.unique && !field.primary_key {
+        col_def.push_str(" UNIQUE");
+    }
     if let Some(default) = &field.default {
         col_def.push_str(&format!(" DEFAULT {}", default));
     }
@@ -127,16 +211,40 @@ fn build_column_def(field: &FieldDef, dialect: Dialect) -> String {
     col_def
 }
 
-/// Generate SQLite table rebuild SQL for ALTER COLUMN operation
+/// Build CREATE INDEX SQL for an index on a table.
+fn build_create_index(table: &str, index: &IndexDef, dialect: Dialect) -> String {
+    let mut stmt = SeaIndex::create();
+    stmt.name(&index.name).table(Alias::new(table));
+
+    if index.unique {
+        stmt.unique();
+    }
+
+    for field in &index.fields {
+        stmt.col(Alias::new(field));
+    }
+
+    // Index method (USING btree/hash/gin/gist) — Postgres only
+    if dialect == Dialect::Postgres {
+        if let Some(method) = &index.method {
+            stmt.index_type(IndexType::Custom(Alias::new(method).into_iden()));
+        }
+    }
+
+    build_sql!(stmt, dialect)
+}
+
+// ── SQLite table rebuild ────────────────────────────────────────────────────
+
+/// SQLite doesn't support ALTER COLUMN — rebuild the entire table.
 ///
-/// SQLite doesn't support ALTER COLUMN, so we need to:
-/// 1. Disable foreign keys
-/// 2. Create new table with updated schema (including FK/CHECK inline)
+/// 1. `PRAGMA foreign_keys=OFF`
+/// 2. CREATE TABLE `_new_X` with updated schema
 /// 3. Copy data from old table
-/// 4. Drop old table
-/// 5. Rename new table to original name
+/// 4. DROP old table
+/// 5. RENAME new table
 /// 6. Recreate indexes
-/// 7. Re-enable foreign keys
+/// 7. `PRAGMA foreign_keys=ON`
 fn sqlite_table_rebuild(
     table: &str,
     fields: &[FieldDef],
@@ -149,166 +257,107 @@ fn sqlite_table_rebuild(
     let mut stmts = Vec::new();
     let temp_table = format!("_new_{}", table);
 
-    // 1. Disable foreign keys
     stmts.push("PRAGMA foreign_keys=OFF".to_string());
 
-    // 2. Build new table schema with altered column
-    let mut table_parts = Vec::new();
-    let mut column_names = Vec::new();
+    // Build new table with sea-query
+    let mut create = SeaTable::create();
+    create.table(Alias::new(&temp_table));
 
+    let mut column_names = Vec::new();
     for field in fields {
-        if field.name == altered_column {
-            // Use the new field definition
-            table_parts.push(build_column_def(new_field, Dialect::Sqlite));
+        let col = if field.name == altered_column {
+            field_to_column_def(new_field, Dialect::Sqlite)
         } else {
-            table_parts.push(build_column_def(field, Dialect::Sqlite));
-        }
+            field_to_column_def(field, Dialect::Sqlite)
+        };
+        create.col(col);
         column_names.push(field.name.clone());
     }
 
-    // Add foreign key constraints inline (SQLite requirement)
+    // Inline FK constraints (SQLite requirement)
     for fk in foreign_keys {
-        let on_delete = fk.on_delete.as_deref().unwrap_or("NO ACTION");
-        let on_update = fk.on_update.as_deref().unwrap_or("NO ACTION");
-
-        table_parts.push(format!(
-            "FOREIGN KEY ({}) REFERENCES {} ({}) ON DELETE {} ON UPDATE {}",
-            fk.columns.join(", "),
-            fk.ref_table,
-            fk.ref_columns.join(", "),
-            on_delete,
-            on_update
-        ));
+        let mut fk_stmt = build_fk_stmt(&temp_table, fk);
+        create.foreign_key(&mut fk_stmt);
     }
 
-    // Add check constraints inline (SQLite requirement)
+    // Inline CHECK constraints
     for check in checks {
-        table_parts.push(format!("CHECK ({})", check.expression));
+        create.check(Expr::cust(&check.expression));
     }
 
-    stmts.push(format!(
-        "CREATE TABLE {} ({})",
-        temp_table,
-        table_parts.join(", ")
-    ));
+    stmts.push(create.build(SqliteQueryBuilder));
 
-    // 3. Copy data from old table to new table
+    // Copy data
     let columns = column_names.join(", ");
     stmts.push(format!(
-        "INSERT INTO {} ({}) SELECT {} FROM {}",
-        temp_table, columns, columns, table
+        "INSERT INTO \"{temp_table}\" ({columns}) SELECT {columns} FROM \"{table}\""
     ));
 
-    // 4. Drop old table
-    stmts.push(format!("DROP TABLE {}", table));
+    // Drop old table
+    stmts.push(
+        SeaTable::drop()
+            .table(Alias::new(table))
+            .build(SqliteQueryBuilder),
+    );
 
-    // 5. Rename new table to original name
-    stmts.push(format!("ALTER TABLE {} RENAME TO {}", temp_table, table));
+    // Rename temp → original
+    stmts.push(
+        SeaTable::rename()
+            .table(Alias::new(&temp_table), Alias::new(table))
+            .build(SqliteQueryBuilder),
+    );
 
-    // 6. Recreate indexes
+    // Recreate indexes
     for index in indexes {
-        let unique = if index.unique { "UNIQUE " } else { "" };
-        stmts.push(format!(
-            "CREATE {}INDEX {} ON {} ({})",
-            unique,
-            index.name,
-            table,
-            index.fields.join(", ")
-        ));
+        stmts.push(build_create_index(table, index, Dialect::Sqlite));
     }
 
-    // 7. Re-enable foreign keys
     stmts.push("PRAGMA foreign_keys=ON".to_string());
 
     Ok(stmts)
 }
 
+// ── MigrationOp::to_sql ────────────────────────────────────────────────────
+
 impl MigrationOp {
-    /// Generate SQL for this operation
-    /// Returns Err for operations not supported by the dialect (e.g., ALTER COLUMN on SQLite)
+    /// Generate SQL for this migration operation.
+    ///
+    /// Returns `Err` for operations not supported by the dialect
+    /// (e.g., ALTER COLUMN on SQLite without table schema).
     pub fn to_sql(&self, dialect: Dialect) -> Result<Vec<String>> {
         match self {
             MigrationOp::CreateTable { table } => {
-                let mut fields_sql: Vec<String> = table
-                    .fields
-                    .iter()
-                    .map(|field| build_column_def(field, dialect))
-                    .collect();
+                let mut create = SeaTable::create();
+                create.table(Alias::new(&table.name));
 
-                // For SQLite: FK and CHECK constraints must be inline in CREATE TABLE
-                // (SQLite doesn't support ALTER TABLE ADD CONSTRAINT)
+                for field in &table.fields {
+                    create.col(field_to_column_def(field, dialect));
+                }
+
+                // SQLite: FK and CHECK must be inline in CREATE TABLE
                 if dialect == Dialect::Sqlite {
-                    // Add foreign key constraints inline
                     for fk in &table.foreign_keys {
-                        let on_delete = fk.on_delete.as_deref().unwrap_or("NO ACTION");
-                        let on_update = fk.on_update.as_deref().unwrap_or("NO ACTION");
-
-                        fields_sql.push(format!(
-                            "FOREIGN KEY ({}) REFERENCES {} ({}) ON DELETE {} ON UPDATE {}",
-                            fk.columns.join(", "),
-                            fk.ref_table,
-                            fk.ref_columns.join(", "),
-                            on_delete,
-                            on_update
-                        ));
+                        let mut fk_stmt = build_fk_stmt(&table.name, fk);
+                        create.foreign_key(&mut fk_stmt);
                     }
-
-                    // Add check constraints inline
                     for check in &table.checks {
-                        fields_sql.push(format!("CHECK ({})", check.expression));
+                        create.check(Expr::cust(&check.expression));
                     }
                 }
 
-                let mut sql = vec![format!(
-                    "CREATE TABLE {} ({})",
-                    table.name,
-                    fields_sql.join(", ")
-                )];
+                let mut sql = vec![build_sql!(create, dialect)];
 
-                // Add indexes (works the same for all dialects)
+                // Indexes (all dialects)
                 for index in &table.indexes {
-                    let unique = if index.unique { "UNIQUE " } else { "" };
-
-                    // MySQL and Postgres support USING, SQLite doesn't
-                    let method = match dialect {
-                        Dialect::Postgres => index
-                            .method
-                            .as_ref()
-                            .map(|m| format!(" USING {}", m))
-                            .unwrap_or_default(),
-                        _ => String::new(),
-                    };
-
-                    sql.push(format!(
-                        "CREATE {}INDEX {} ON {} ({}){}",
-                        unique,
-                        index.name,
-                        table.name,
-                        index.fields.join(", "),
-                        method
-                    ));
+                    sql.push(build_create_index(&table.name, index, dialect));
                 }
 
-                // For PostgreSQL/MySQL: Add foreign keys as separate ALTER TABLE
-                // (allows handling circular dependencies between tables)
+                // PG/MySQL: FK and CHECK as separate ALTER TABLE statements
+                // (handles circular dependencies between tables)
                 if dialect != Dialect::Sqlite {
                     for fk in &table.foreign_keys {
-                        let on_delete = fk.on_delete.as_deref().unwrap_or("NO ACTION");
-                        let on_update = fk.on_update.as_deref().unwrap_or("NO ACTION");
-
-                        sql.push(format!(
-                            "ALTER TABLE {} ADD CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({}) ON DELETE {} ON UPDATE {}",
-                            table.name,
-                            fk.name,
-                            fk.columns.join(", "),
-                            fk.ref_table,
-                            fk.ref_columns.join(", "),
-                            on_delete,
-                            on_update
-                        ));
+                        sql.push(build_sql!(build_fk_stmt(&table.name, fk), dialect));
                     }
-
-                    // Add check constraints
                     for check in &table.checks {
                         sql.push(format!(
                             "ALTER TABLE {} ADD CONSTRAINT {} CHECK ({})",
@@ -319,37 +368,36 @@ impl MigrationOp {
 
                 Ok(sql)
             }
-            MigrationOp::DropTable { name, table: _ } => Ok(vec![format!("DROP TABLE {}", name)]),
-            MigrationOp::RenameTable { old_name, new_name } => Ok(match dialect {
-                Dialect::Mysql => vec![format!("RENAME TABLE {} TO {}", old_name, new_name)],
-                _ => vec![format!("ALTER TABLE {} RENAME TO {}", old_name, new_name)],
-            }),
+
+            MigrationOp::DropTable { name, table: _ } => Ok(vec![build_sql!(
+                SeaTable::drop().table(Alias::new(name)),
+                dialect
+            )]),
+
+            MigrationOp::RenameTable { old_name, new_name } => Ok(vec![build_sql!(
+                SeaTable::rename().table(Alias::new(old_name), Alias::new(new_name)),
+                dialect
+            )]),
+
             MigrationOp::AddColumn { table, field } => {
-                let sql_type = resolve_field_type(field, dialect);
-                let mut field_sql = format!("{} {}", field.name, sql_type);
-
-                if !field.nullable {
-                    field_sql.push_str(" NOT NULL");
-                }
-
-                if field.unique {
-                    field_sql.push_str(" UNIQUE");
-                }
-
-                if let Some(default) = &field.default {
-                    field_sql.push_str(&format!(" DEFAULT {}", default));
-                }
-
-                Ok(vec![format!(
-                    "ALTER TABLE {} ADD COLUMN {}",
-                    table, field_sql
+                let col = field_to_column_def(field, dialect);
+                Ok(vec![build_sql!(
+                    SeaTable::alter().table(Alias::new(table)).add_column(col),
+                    dialect
                 )])
             }
+
             MigrationOp::DropColumn {
                 table,
                 field,
                 field_def: _,
-            } => Ok(vec![format!("ALTER TABLE {} DROP COLUMN {}", table, field)]),
+            } => Ok(vec![build_sql!(
+                SeaTable::alter()
+                    .table(Alias::new(table))
+                    .drop_column(Alias::new(field)),
+                dialect
+            )]),
+
             MigrationOp::RenameColumn {
                 table,
                 old_name,
@@ -360,32 +408,30 @@ impl MigrationOp {
                     Dialect::Mysql => {
                         // MySQL CHANGE requires full column definition
                         if let Some(field) = field_def {
-                            // Build full definition with new name
-                            let mut renamed_field = field.clone();
-                            renamed_field.name = new_name.clone();
-                            let col_def = build_column_def(&renamed_field, dialect);
+                            let mut renamed = field.clone();
+                            renamed.name = new_name.clone();
                             vec![format!(
-                                "ALTER TABLE {} CHANGE {} {}",
-                                table, old_name, col_def
+                                "ALTER TABLE `{}` CHANGE `{}` {}",
+                                table,
+                                old_name,
+                                mysql_column_def(&renamed)
                             )]
                         } else {
-                            // Fallback: just type (loses attributes - emit warning comment)
                             vec![
                                 format!("-- WARNING: field_def not provided, column attributes may be lost"),
-                                format!("ALTER TABLE {} CHANGE {} {} TEXT", table, old_name, new_name),
+                                format!("ALTER TABLE `{}` CHANGE `{}` `{}` TEXT", table, old_name, new_name),
                             ]
                         }
                     }
-                    Dialect::Postgres => vec![format!(
-                        "ALTER TABLE {} RENAME COLUMN {} TO {}",
-                        table, old_name, new_name
-                    )],
-                    Dialect::Sqlite => vec![format!(
-                        "ALTER TABLE {} RENAME COLUMN {} TO {}",
-                        table, old_name, new_name
+                    _ => vec![build_sql!(
+                        SeaTable::alter()
+                            .table(Alias::new(table))
+                            .rename_column(Alias::new(old_name), Alias::new(new_name)),
+                        dialect
                     )],
                 })
             }
+
             MigrationOp::AlterColumn {
                 table,
                 old_field,
@@ -394,134 +440,110 @@ impl MigrationOp {
                 table_indexes,
                 table_foreign_keys,
                 table_checks,
-            } => {
-                match dialect {
-                    Dialect::Postgres => {
-                        // PostgreSQL: multiple ALTER statements for type, null, default
-                        let mut stmts = Vec::new();
+            } => match dialect {
+                Dialect::Postgres => {
+                    let mut stmts = Vec::new();
+                    let old_sql_type = resolve_field_type(old_field, dialect);
+                    let new_sql_type = resolve_field_type(new_field, dialect);
 
-                        // Resolve types for comparison and SQL generation
-                        let old_sql_type = resolve_field_type(old_field, dialect);
-                        let new_sql_type = resolve_field_type(new_field, dialect);
-
-                        // Change type if different
-                        if old_sql_type != new_sql_type {
-                            stmts.push(format!(
-                                "ALTER TABLE {} ALTER COLUMN {} TYPE {}",
-                                table, new_field.name, new_sql_type
-                            ));
-                        }
-
-                        // Change nullability if different
-                        if old_field.nullable != new_field.nullable {
-                            let null_action = if new_field.nullable {
-                                "DROP NOT NULL"
-                            } else {
-                                "SET NOT NULL"
-                            };
-                            stmts.push(format!(
-                                "ALTER TABLE {} ALTER COLUMN {} {}",
-                                table, new_field.name, null_action
-                            ));
-                        }
-
-                        // Change default if different
-                        if old_field.default != new_field.default {
-                            if let Some(default) = &new_field.default {
-                                stmts.push(format!(
-                                    "ALTER TABLE {} ALTER COLUMN {} SET DEFAULT {}",
-                                    table, new_field.name, default
-                                ));
-                            } else {
-                                stmts.push(format!(
-                                    "ALTER TABLE {} ALTER COLUMN {} DROP DEFAULT",
-                                    table, new_field.name
-                                ));
-                            }
-                        }
-
-                        // Change unique constraint if different
-                        if old_field.unique != new_field.unique {
-                            if new_field.unique {
-                                // Add unique constraint
-                                stmts.push(format!(
-                                    "ALTER TABLE {} ADD CONSTRAINT {}_{}_key UNIQUE ({})",
-                                    table, table, new_field.name, new_field.name
-                                ));
-                            } else {
-                                // Drop unique constraint
-                                stmts.push(format!(
-                                    "ALTER TABLE {} DROP CONSTRAINT {}_{}_key",
-                                    table, table, new_field.name
-                                ));
-                            }
-                        }
-
-                        Ok(stmts)
+                    if old_sql_type != new_sql_type {
+                        stmts.push(format!(
+                            "ALTER TABLE \"{}\" ALTER COLUMN \"{}\" TYPE {}",
+                            table, new_field.name, new_sql_type
+                        ));
                     }
-                    Dialect::Mysql => {
-                        // MySQL: MODIFY COLUMN with full column definition
-                        let col_def = build_column_def(new_field, dialect);
-                        Ok(vec![format!(
-                            "ALTER TABLE {} MODIFY COLUMN {}",
-                            table, col_def
-                        )])
-                    }
-                    Dialect::Sqlite => {
-                        // SQLite: table rebuild if we have full schema
-                        if let Some(fields) = table_fields {
-                            sqlite_table_rebuild(
-                                table,
-                                fields,
-                                table_indexes.as_deref().unwrap_or(&[]),
-                                table_foreign_keys.as_deref().unwrap_or(&[]),
-                                table_checks.as_deref().unwrap_or(&[]),
-                                &old_field.name,
-                                new_field,
-                            )
+
+                    if old_field.nullable != new_field.nullable {
+                        let null_action = if new_field.nullable {
+                            "DROP NOT NULL"
                         } else {
-                            // No schema provided - return explicit error
-                            Err(MigrateError::MigrationError(format!(
-                                "SQLite does not support ALTER COLUMN. Table '{}' column '{}' requires table rebuild. \
-                                Provide table_fields for automatic rebuild, or use manual migration: \
-                                1) CREATE TABLE {}_new with new schema, \
-                                2) INSERT INTO {}_new SELECT * FROM {}, \
-                                3) DROP TABLE {}, \
-                                4) ALTER TABLE {}_new RENAME TO {}",
-                                table, new_field.name,
-                                table, table, table, table, table, table
-                            )))
+                            "SET NOT NULL"
+                        };
+                        stmts.push(format!(
+                            "ALTER TABLE \"{}\" ALTER COLUMN \"{}\" {}",
+                            table, new_field.name, null_action
+                        ));
+                    }
+
+                    if old_field.default != new_field.default {
+                        if let Some(default) = &new_field.default {
+                            stmts.push(format!(
+                                "ALTER TABLE \"{}\" ALTER COLUMN \"{}\" SET DEFAULT {}",
+                                table, new_field.name, default
+                            ));
+                        } else {
+                            stmts.push(format!(
+                                "ALTER TABLE \"{}\" ALTER COLUMN \"{}\" DROP DEFAULT",
+                                table, new_field.name
+                            ));
                         }
+                    }
+
+                    if old_field.unique != new_field.unique {
+                        if new_field.unique {
+                            stmts.push(format!(
+                                "ALTER TABLE \"{}\" ADD CONSTRAINT \"{}_{}_key\" UNIQUE (\"{}\")",
+                                table, table, new_field.name, new_field.name
+                            ));
+                        } else {
+                            stmts.push(format!(
+                                "ALTER TABLE \"{}\" DROP CONSTRAINT \"{}_{}_key\"",
+                                table, table, new_field.name
+                            ));
+                        }
+                    }
+
+                    Ok(stmts)
+                }
+                Dialect::Mysql => {
+                    // MySQL: MODIFY COLUMN with full column definition
+                    Ok(vec![format!(
+                        "ALTER TABLE `{}` MODIFY COLUMN {}",
+                        table,
+                        mysql_column_def(new_field)
+                    )])
+                }
+                Dialect::Sqlite => {
+                    if let Some(fields) = table_fields {
+                        sqlite_table_rebuild(
+                            table,
+                            fields,
+                            table_indexes.as_deref().unwrap_or(&[]),
+                            table_foreign_keys.as_deref().unwrap_or(&[]),
+                            table_checks.as_deref().unwrap_or(&[]),
+                            &old_field.name,
+                            new_field,
+                        )
+                    } else {
+                        Err(MigrateError::MigrationError(format!(
+                            "SQLite does not support ALTER COLUMN. Table '{}' column '{}' requires table rebuild. \
+                            Provide table_fields for automatic rebuild, or use manual migration: \
+                            1) CREATE TABLE {}_new with new schema, \
+                            2) INSERT INTO {}_new SELECT * FROM {}, \
+                            3) DROP TABLE {}, \
+                            4) ALTER TABLE {}_new RENAME TO {}",
+                            table, new_field.name,
+                            table, table, table, table, table, table
+                        )))
                     }
                 }
-            }
-            MigrationOp::CreateIndex { table, index } => {
-                let unique = if index.unique { "UNIQUE " } else { "" };
-                let method = index
-                    .method
-                    .as_ref()
-                    .map(|m| format!(" USING {}", m))
-                    .unwrap_or_default();
+            },
 
-                Ok(vec![format!(
-                    "CREATE {}INDEX {} ON {} ({}){}",
-                    unique,
-                    index.name,
-                    table,
-                    index.fields.join(", "),
-                    method
-                )])
+            MigrationOp::CreateIndex { table, index } => {
+                Ok(vec![build_create_index(table, index, dialect)])
             }
+
             MigrationOp::DropIndex {
                 table,
                 index,
                 index_def: _,
-            } => Ok(match dialect {
-                Dialect::Mysql => vec![format!("DROP INDEX {} ON {}", index, table)],
-                _ => vec![format!("DROP INDEX {}", index)],
-            }),
+            } => {
+                let mut stmt = SeaIndex::drop();
+                stmt.name(index).table(Alias::new(table));
+                Ok(vec![build_sql!(stmt, dialect)])
+            }
+
             MigrationOp::AddForeignKey { table, fk } => {
-                // SQLite doesn't support ALTER TABLE ADD CONSTRAINT for foreign keys
                 if dialect == Dialect::Sqlite {
                     return Err(MigrateError::MigrationError(format!(
                         "SQLite does not support ALTER TABLE ADD FOREIGN KEY. \
@@ -530,27 +552,14 @@ impl MigrationOp {
                         table
                     )));
                 }
-
-                let on_delete = fk.on_delete.as_deref().unwrap_or("NO ACTION");
-                let on_update = fk.on_update.as_deref().unwrap_or("NO ACTION");
-
-                Ok(vec![format!(
-                    "ALTER TABLE {} ADD CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({}) ON DELETE {} ON UPDATE {}",
-                    table,
-                    fk.name,
-                    fk.columns.join(", "),
-                    fk.ref_table,
-                    fk.ref_columns.join(", "),
-                    on_delete,
-                    on_update
-                )])
+                Ok(vec![build_sql!(build_fk_stmt(table, fk), dialect)])
             }
+
             MigrationOp::DropForeignKey {
                 table,
                 name,
                 fk_def: _,
             } => {
-                // SQLite doesn't support ALTER TABLE DROP CONSTRAINT
                 if dialect == Dialect::Sqlite {
                     return Err(MigrateError::MigrationError(format!(
                         "SQLite does not support ALTER TABLE DROP FOREIGN KEY. \
@@ -560,21 +569,12 @@ impl MigrationOp {
                     )));
                 }
 
-                Ok(match dialect {
-                    // MySQL uses DROP FOREIGN KEY
-                    Dialect::Mysql => {
-                        vec![format!("ALTER TABLE {} DROP FOREIGN KEY {}", table, name)]
-                    }
-                    // PostgreSQL uses DROP CONSTRAINT
-                    Dialect::Postgres => {
-                        vec![format!("ALTER TABLE {} DROP CONSTRAINT {}", table, name)]
-                    }
-                    // SQLite case handled above
-                    Dialect::Sqlite => unreachable!(),
-                })
+                let mut stmt = SeaForeignKey::drop();
+                stmt.name(name).table(Alias::new(table));
+                Ok(vec![build_sql!(stmt, dialect)])
             }
+
             MigrationOp::AddCheck { table, check } => {
-                // SQLite doesn't support ALTER TABLE ADD CONSTRAINT for check constraints
                 if dialect == Dialect::Sqlite {
                     return Err(MigrateError::MigrationError(format!(
                         "SQLite does not support ALTER TABLE ADD CHECK. \
@@ -583,18 +583,17 @@ impl MigrationOp {
                         table
                     )));
                 }
-
                 Ok(vec![format!(
                     "ALTER TABLE {} ADD CONSTRAINT {} CHECK ({})",
                     table, check.name, check.expression
                 )])
             }
+
             MigrationOp::DropCheck {
                 table,
                 name,
                 check_def: _,
             } => {
-                // SQLite doesn't support ALTER TABLE DROP CONSTRAINT
                 if dialect == Dialect::Sqlite {
                     return Err(MigrateError::MigrationError(format!(
                         "SQLite does not support ALTER TABLE DROP CHECK. \
@@ -603,15 +602,11 @@ impl MigrationOp {
                         name, table
                     )));
                 }
-
                 Ok(match dialect {
-                    // MySQL uses DROP CHECK
                     Dialect::Mysql => vec![format!("ALTER TABLE {} DROP CHECK {}", table, name)],
-                    // PostgreSQL uses DROP CONSTRAINT
                     Dialect::Postgres => {
                         vec![format!("ALTER TABLE {} DROP CONSTRAINT {}", table, name)]
                     }
-                    // SQLite case handled above
                     Dialect::Sqlite => unreachable!(),
                 })
             }

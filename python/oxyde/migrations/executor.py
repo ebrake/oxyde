@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.util
-import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -22,7 +20,6 @@ from oxyde.migrations.context import MigrationContext
 from oxyde.migrations.replay import (
     SchemaState,
     _get_migration_dependency,
-    _load_migration_module,
 )
 from oxyde.migrations.tracker import (
     ensure_migrations_table,
@@ -31,39 +28,17 @@ from oxyde.migrations.tracker import (
     record_migration,
     remove_migration,
 )
+from oxyde.migrations.utils import (
+    detect_dialect,
+    load_migration_module,
+    parse_query_result,
+)
 
 if TYPE_CHECKING:
     from oxyde.db.pool import AsyncDatabase
 
 # Advisory lock key for migrations (arbitrary unique number)
 MIGRATION_LOCK_KEY = 0x4F587944  # "OxyD" in hex
-
-
-def _parse_query_result(result_bytes: bytes) -> list[dict[str, Any]]:
-    """Parse MessagePack query result into list of dicts.
-
-    Args:
-        result_bytes: Raw MessagePack bytes from query
-
-    Returns:
-        List of row dicts with column names as keys
-    """
-    if not result_bytes:
-        return []
-
-    result = msgpack.unpackb(result_bytes, raw=False)
-
-    # Format: [columns, rows] where columns is list of names, rows is list of lists
-    if isinstance(result, list) and len(result) == 2:
-        columns, rows = result
-        if isinstance(columns, list) and isinstance(rows, list):
-            return [dict(zip(columns, row)) for row in rows]
-
-    # Fallback: already list of dicts
-    if isinstance(result, list) and all(isinstance(r, dict) for r in result):
-        return result
-
-    return []
 
 
 def _check_migration_dependency(
@@ -79,7 +54,7 @@ def _check_migration_dependency(
     Raises:
         RuntimeError: If dependency is not satisfied
     """
-    module = _load_migration_module(migration_path)
+    module = load_migration_module(migration_path)
     if module is None:
         return
 
@@ -121,7 +96,7 @@ async def _acquire_migration_lock(
             ir = build_raw_sql_ir(sql=sql)
             ir_bytes = msgpack.packb(ir, default=_msgpack_encoder)
             result_bytes = await execute_in_transaction(db_conn.name, tx_id, ir_bytes)
-            result = _parse_query_result(result_bytes)
+            result = parse_query_result(result_bytes)
             if result and result[0].get("pg_try_advisory_lock", False):
                 return True, tx_id
             await commit_transaction(tx_id)
@@ -132,7 +107,7 @@ async def _acquire_migration_lock(
             ir = build_raw_sql_ir(sql=sql)
             ir_bytes = msgpack.packb(ir, default=_msgpack_encoder)
             result_bytes = await execute_in_transaction(db_conn.name, tx_id, ir_bytes)
-            result = _parse_query_result(result_bytes)
+            result = parse_query_result(result_bytes)
             if result and len(result) > 0:
                 val = list(result[0].values())[0]
                 if val == 1:
@@ -187,23 +162,21 @@ async def _release_migration_lock(
             pass
 
 
-def import_migration_module(filepath: Path) -> Any:
-    """Import migration module from file.
+def _require_migration_module(filepath: Path) -> Any:
+    """Load a migration module, raising on failure.
 
     Args:
         filepath: Path to migration file
 
     Returns:
-        Imported module
+        Loaded module
+
+    Raises:
+        ImportError: If module cannot be loaded
     """
-    spec = importlib.util.spec_from_file_location(filepath.stem, filepath)
-    if spec is None or spec.loader is None:
+    module = load_migration_module(filepath)
+    if module is None:
         raise ImportError(f"Cannot load migration from {filepath}")
-
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[filepath.stem] = module
-    spec.loader.exec_module(module)
-
     return module
 
 
@@ -230,7 +203,7 @@ def replay_migrations_up_to(
         if filepath == target_migration and not include_target:
             break
 
-        module = import_migration_module(filepath)
+        module = _require_migration_module(filepath)
 
         if hasattr(module, "upgrade"):
             ctx = MigrationContext(mode="collect")
@@ -294,16 +267,7 @@ async def apply_migrations(
     # Get database connection and detect dialect
     db_conn = await _get_connection_async(db_alias)
 
-    # Detect dialect from database URL
-    url_lower = db_conn.url.lower()
-    if url_lower.startswith("sqlite"):
-        dialect = "sqlite"
-    elif url_lower.startswith("postgres"):
-        dialect = "postgres"
-    elif url_lower.startswith("mysql"):
-        dialect = "mysql"
-    else:
-        dialect = "sqlite"  # Default to sqlite
+    dialect = detect_dialect(db_conn.url)
 
     # Acquire advisory lock to prevent concurrent migrations
     lock_acquired, lock_tx_id = await _acquire_migration_lock(db_conn, dialect)
@@ -330,7 +294,7 @@ async def apply_migrations(
 
             if not fake:
                 # Import migration module
-                module = import_migration_module(migration_path)
+                module = _require_migration_module(migration_path)
 
                 if not hasattr(module, "upgrade"):
                     raise RuntimeError(
@@ -392,7 +356,7 @@ def _check_rollback_dependency(
         if not migration_path.exists():
             continue
 
-        module = _load_migration_module(migration_path)
+        module = load_migration_module(migration_path)
         if module is None:
             continue
 
@@ -430,16 +394,7 @@ async def rollback_migration(
     # Get database connection and detect dialect
     db_conn = await _get_connection_async(db_alias)
 
-    # Detect dialect from database URL
-    url_lower = db_conn.url.lower()
-    if url_lower.startswith("sqlite"):
-        dialect = "sqlite"
-    elif url_lower.startswith("postgres"):
-        dialect = "postgres"
-    elif url_lower.startswith("mysql"):
-        dialect = "mysql"
-    else:
-        dialect = "sqlite"  # Default to sqlite
+    dialect = detect_dialect(db_conn.url)
 
     # Acquire advisory lock
     lock_acquired, lock_tx_id = await _acquire_migration_lock(db_conn, dialect)
@@ -451,7 +406,7 @@ async def rollback_migration(
     try:
         if not fake:
             # Import migration module
-            module = import_migration_module(migration_path)
+            module = _require_migration_module(migration_path)
 
             if not hasattr(module, "downgrade"):
                 raise RuntimeError(

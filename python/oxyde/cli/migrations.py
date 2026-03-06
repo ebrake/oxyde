@@ -385,7 +385,7 @@ def sqlmigrate(
     """
     from oxyde.core import migration_to_sql
     from oxyde.migrations.context import MigrationContext
-    from oxyde.migrations.executor import import_migration_module
+    from oxyde.migrations.utils import load_migration_module
 
     # Load config
     config = load_config_or_exit()
@@ -401,9 +401,9 @@ def sqlmigrate(
             raise typer.Exit(1)
 
         # Import migration module
-        module = import_migration_module(migration_path)
+        module = load_migration_module(migration_path)
 
-        if not hasattr(module, "upgrade"):
+        if module is None or not hasattr(module, "upgrade"):
             typer.secho("❌ Migration missing upgrade() function", fg=typer.colors.RED)
             raise typer.Exit(1)
 
