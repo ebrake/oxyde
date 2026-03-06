@@ -39,7 +39,9 @@ TYPE_REGISTRY: dict[type, TypeDescriptor] = {
     datetime: TypeDescriptor("datetime", "datetime", lambda v: v.isoformat()),
     date: TypeDescriptor("date", "datetime", lambda v: v.isoformat()),
     time: TypeDescriptor("time", "datetime", lambda v: v.isoformat()),
-    timedelta: TypeDescriptor("timedelta", "generic", lambda v: v.total_seconds()),
+    timedelta: TypeDescriptor(
+        "timedelta", "generic", lambda v: int(v.total_seconds() * 1_000_000)
+    ),
     UUID: TypeDescriptor("uuid", "generic", str),
     Decimal: TypeDescriptor("decimal", "numeric", str),
     dict: TypeDescriptor("json", "generic", lambda v: v),

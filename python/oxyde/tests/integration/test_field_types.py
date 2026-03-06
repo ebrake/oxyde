@@ -11,7 +11,7 @@ import uuid
 import pytest
 import pytest_asyncio
 
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from uuid import UUID
 
@@ -435,16 +435,10 @@ class TestBytesRoundTrip:
 
 
 class TestTimedeltaRoundTrip:
-    """timedelta is broken: stored as total_seconds float, Pydantic can't parse it back.
-
-    Write succeeds (stores "5400.0"), read fails with ValidationError.
-    Will be fixed by B3 (BIGINT microseconds).
-    """
+    """timedelta round-trip: stored as BIGINT microseconds."""
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(reason="B3: timedelta stored as float string, Pydantic rejects", strict=True)
     async def test_basic(self, db):
-        from datetime import timedelta
         from oxyde.models.registry import register_table
 
         class TdModel(Model):
@@ -460,7 +454,7 @@ class TestTimedeltaRoundTrip:
         from oxyde.queries import execute_raw
         await execute_raw(
             "CREATE TABLE IF NOT EXISTS td_model "
-            "(id INTEGER PRIMARY KEY AUTOINCREMENT, duration TEXT)",
+            "(id INTEGER PRIMARY KEY AUTOINCREMENT, duration BIGINT)",
             client=db,
         )
 

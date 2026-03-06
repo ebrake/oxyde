@@ -7,6 +7,7 @@ Model.model_config - no sanitization needed.
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 import msgpack
@@ -28,6 +29,23 @@ from oxyde.queries.joins import _JoinDescriptor
 
 if TYPE_CHECKING:
     from oxyde.models.base import Model
+
+
+def _convert_timedelta_columns(
+    rows: list[dict[str, Any]],
+    col_types: dict[str, str] | None,
+) -> None:
+    """Convert timedelta columns from int microseconds to timedelta objects in-place."""
+    if not col_types:
+        return
+    td_cols = [col for col, typ in col_types.items() if typ == "timedelta"]
+    if not td_cols:
+        return
+    for row in rows:
+        for col in td_cols:
+            val = row.get(col)
+            if isinstance(val, int):
+                row[col] = timedelta(microseconds=val)
 
 
 class ExecutionMixin:
@@ -143,6 +161,8 @@ class ExecutionMixin:
         result_bytes = await self.fetch_msgpack(client)
         data = msgpack.unpackb(result_bytes, raw=False, strict_map_key=False)
 
+        col_types = model_class._db_meta.col_types
+
         if (
             isinstance(data, (list, tuple))
             and len(data) == 3
@@ -152,6 +172,7 @@ class ExecutionMixin:
             # Dedup format: [main_columns, main_rows, relations_map]
             main_columns, main_rows, relations_map = data
             rows = [dict(zip(main_columns, row)) for row in main_rows]
+            _convert_timedelta_columns(rows, col_types)
             models = adapter.validate_python(rows)
             self._hydrate_from_dedup(models, relations_map)
         elif (
@@ -163,9 +184,11 @@ class ExecutionMixin:
             # Columnar format: [columns, rows] (columns may be empty for 0 rows)
             columns, row_values = data
             rows = [dict(zip(columns, row)) for row in row_values]
+            _convert_timedelta_columns(rows, col_types)
             models = adapter.validate_python(rows)
         else:
             rows = data if isinstance(data, list) else []
+            _convert_timedelta_columns(rows, col_types)
             models = adapter.validate_python(rows)
 
         if self._prefetch_paths:

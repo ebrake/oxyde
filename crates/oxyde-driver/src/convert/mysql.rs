@@ -80,9 +80,17 @@ impl CellEncoder for MySqlEncoder {
                 }
                 true
             }
-            "uuid" | "decimal" | "timedelta" => {
+            "uuid" | "decimal" => {
                 match row.try_get::<Option<String>, _>(idx) {
                     Ok(Some(v)) => write_str(buf, &v),
+                    Ok(None) => write_nil(buf),
+                    Err(_) => write_nil(buf),
+                }
+                true
+            }
+            "timedelta" => {
+                match row.try_get::<Option<i64>, _>(idx) {
+                    Ok(Some(v)) => write_i64(buf, v),
                     Ok(None) => write_nil(buf),
                     Err(_) => write_nil(buf),
                 }

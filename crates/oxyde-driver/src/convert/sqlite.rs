@@ -59,9 +59,17 @@ impl CellEncoder for SqliteEncoder {
                 true
             }
             // datetime, date, time, timedelta, decimal, uuid — stored as TEXT in SQLite
-            "datetime" | "date" | "time" | "timedelta" | "decimal" | "uuid" => {
+            "datetime" | "date" | "time" | "decimal" | "uuid" => {
                 match row.try_get::<Option<String>, _>(idx) {
                     Ok(Some(v)) => write_str(buf, &v),
+                    Ok(None) => write_nil(buf),
+                    Err(_) => write_nil(buf),
+                }
+                true
+            }
+            "timedelta" => {
+                match row.try_get::<Option<i64>, _>(idx) {
+                    Ok(Some(v)) => write_i64(buf, v),
                     Ok(None) => write_nil(buf),
                     Err(_) => write_nil(buf),
                 }

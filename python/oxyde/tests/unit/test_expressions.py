@@ -225,7 +225,7 @@ class TestSerializeValueForIR:
         assert _serialize_value_for_ir(t) == "12:30:45"
 
         td = timedelta(hours=1, minutes=30)
-        assert _serialize_value_for_ir(td) == 5400.0  # total_seconds
+        assert _serialize_value_for_ir(td) == 5_400_000_000  # microseconds
 
     def test_serialize_uuid_decimal(self):
         """Test serializing UUID and Decimal types."""
