@@ -5,7 +5,7 @@ use sea_query::{Expr, MysqlQueryBuilder, PostgresQueryBuilder, Query, SqliteQuer
 
 use crate::error::Result;
 use crate::filter::build_filter_node;
-use crate::utils::{json_to_simple_expr, json_to_value_typed, ColumnIdent, TableIdent};
+use crate::utils::{rmpv_to_simple_expr, rmpv_to_value_typed, ColumnIdent, TableIdent};
 use crate::Dialect;
 
 /// Build UPDATE query from QueryIR
@@ -28,13 +28,13 @@ pub fn build_update(ir: &QueryIR, dialect: Dialect) -> Result<(String, Vec<Value
 
     if let Some(values) = &ir.values {
         for (col, val) in values {
-            if let Some(expr) = json_to_simple_expr(val)? {
+            if let Some(expr) = rmpv_to_simple_expr(val)? {
                 query.value(ColumnIdent(col.clone()), expr);
             } else {
                 let col_type = get_col_type(col);
                 query.value(
                     ColumnIdent(col.clone()),
-                    Expr::val(json_to_value_typed(val, col_type)),
+                    Expr::val(rmpv_to_value_typed(val, col_type)),
                 );
             }
         }

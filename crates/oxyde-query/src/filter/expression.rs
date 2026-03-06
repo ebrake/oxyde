@@ -4,7 +4,7 @@ use oxyde_codec::{Filter, FilterNode};
 use sea_query::{BinOper, Expr, Func, SimpleExpr, Value};
 
 use crate::error::{QueryError, Result};
-use crate::utils::{json_to_value, ColumnIdent, TableIdent};
+use crate::utils::{rmpv_to_value, ColumnIdent, TableIdent};
 
 /// Create column expression, handling "table.column" format for joins
 /// If default_table is provided and column is not already qualified, prepend it
@@ -71,7 +71,7 @@ pub fn build_filter_node(node: &FilterNode, default_table: Option<&str>) -> Resu
 pub fn apply_filter(filter: &Filter, default_table: Option<&str>) -> Result<SimpleExpr> {
     let col_name = filter.column.as_ref().unwrap_or(&filter.field);
     let col = make_col_expr(col_name, default_table);
-    let val = json_to_value(&filter.value);
+    let val = rmpv_to_value(&filter.value);
 
     let expr = match filter.operator.as_str() {
         "=" => col.eq(val),
@@ -91,14 +91,12 @@ pub fn apply_filter(filter: &Filter, default_table: Option<&str>) -> Result<Simp
                 QueryError::InvalidQuery("ILIKE operator requires string value".into())
             })?;
             let lowered = text.to_lowercase();
-            // Use col_name (respects filter.column alias) instead of filter.field
             let lower_col = Func::lower(make_col_expr(col_name, default_table));
             Expr::expr(lower_col).binary(BinOper::Like, Expr::val(Value::from(lowered)))
         }
         "IN" => {
-            // For IN operator, value should be an array
-            if let serde_json::Value::Array(arr) = &filter.value {
-                let values: Vec<Value> = arr.iter().map(json_to_value).collect();
+            if let rmpv::Value::Array(arr) = &filter.value {
+                let values: Vec<Value> = arr.iter().map(rmpv_to_value).collect();
                 col.is_in(values)
             } else {
                 return Err(QueryError::InvalidQuery(
@@ -107,14 +105,14 @@ pub fn apply_filter(filter: &Filter, default_table: Option<&str>) -> Result<Simp
             }
         }
         "BETWEEN" => {
-            if let serde_json::Value::Array(arr) = &filter.value {
+            if let rmpv::Value::Array(arr) = &filter.value {
                 if arr.len() != 2 {
                     return Err(QueryError::InvalidQuery(
                         "BETWEEN operator requires exactly two values".to_string(),
                     ));
                 }
-                let start = Expr::val(json_to_value(&arr[0]));
-                let end = Expr::val(json_to_value(&arr[1]));
+                let start = Expr::val(rmpv_to_value(&arr[0]));
+                let end = Expr::val(rmpv_to_value(&arr[1]));
                 col.between(start, end)
             } else {
                 return Err(QueryError::InvalidQuery(
@@ -126,8 +124,7 @@ pub fn apply_filter(filter: &Filter, default_table: Option<&str>) -> Result<Simp
         "IS NOT NULL" => col.is_not_null(),
         op => {
             return Err(QueryError::UnsupportedOperation(format!(
-                "Unsupported operator: {}",
-                op
+                "Unsupported operator: {op}",
             )))
         }
     };

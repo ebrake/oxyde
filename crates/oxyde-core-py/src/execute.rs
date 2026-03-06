@@ -3,7 +3,7 @@
 use std::time::Instant;
 
 use crate::convert::{backend_to_dialect, json_to_py, value_to_py, values_to_py};
-use crate::types::{InsertResult, MutationResult};
+use crate::types::{encode_insert_result, encode_mutation_result};
 use oxyde_codec::QueryIR;
 use oxyde_driver::{
     execute_insert_returning, execute_insert_returning_in_transaction, execute_mutation_returning,
@@ -105,11 +105,7 @@ pub(crate) fn execute<'py>(
                         .await
                         .map_err(|e| PyErr::new::<PyRuntimeError, _>(e.to_string()))?;
 
-                    rmp_serde::to_vec_named(&InsertResult {
-                        affected: ids.len(),
-                        inserted_ids: ids,
-                    })
-                    .map_err(|e| PyErr::new::<PyRuntimeError, _>(e.to_string()))?
+                    encode_insert_result(ids.len(), &ids)
                 }
             }
             oxyde_codec::Operation::Update | oxyde_codec::Operation::Delete => {
@@ -143,8 +139,7 @@ pub(crate) fn execute<'py>(
                     let exec_us = exec_start.elapsed().as_micros();
 
                     let serialize_start = Instant::now();
-                    let result = rmp_serde::to_vec_named(&MutationResult { affected })
-                        .map_err(|e| PyErr::new::<PyRuntimeError, _>(e.to_string()))?;
+                    let result = encode_mutation_result(affected);
                     let serialize_us = serialize_start.elapsed().as_micros();
 
                     if profile {
@@ -230,11 +225,7 @@ pub(crate) fn execute_in_transaction<'py>(
                             .await
                             .map_err(|e| PyErr::new::<PyRuntimeError, _>(e.to_string()))?;
 
-                    rmp_serde::to_vec_named(&InsertResult {
-                        affected: ids.len(),
-                        inserted_ids: ids,
-                    })
-                    .map_err(|e| PyErr::new::<PyRuntimeError, _>(e.to_string()))?
+                    encode_insert_result(ids.len(), &ids)
                 }
             }
             oxyde_codec::Operation::Update | oxyde_codec::Operation::Delete => {
@@ -247,8 +238,7 @@ pub(crate) fn execute_in_transaction<'py>(
                         .await
                         .map_err(|e| PyErr::new::<PyRuntimeError, _>(e.to_string()))?;
 
-                    rmp_serde::to_vec_named(&MutationResult { affected })
-                        .map_err(|e| PyErr::new::<PyRuntimeError, _>(e.to_string()))?
+                    encode_mutation_result(affected)
                 }
             }
         };

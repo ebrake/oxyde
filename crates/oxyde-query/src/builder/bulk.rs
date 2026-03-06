@@ -10,7 +10,7 @@ use sea_query::{
 
 use crate::error::{QueryError, Result};
 use crate::filter::build_filter_node;
-use crate::utils::{json_to_value, ColumnIdent, TableIdent};
+use crate::utils::{rmpv_to_value, ColumnIdent, TableIdent};
 use crate::Dialect;
 
 /// Build bulk UPDATE query using CASE WHEN statements
@@ -44,7 +44,7 @@ pub fn build_bulk_update(
         let mut case_stmt = CaseStatement::new();
         for (row, cond) in bulk.rows.iter().zip(&row_conditions) {
             if let Some(value) = row.values.get(&column) {
-                case_stmt = case_stmt.case(cond.clone(), Expr::val(json_to_value(value)));
+                case_stmt = case_stmt.case(cond.clone(), Expr::val(rmpv_to_value(value)));
             }
         }
         case_stmt = case_stmt.finally(Expr::col(ColumnIdent(column.clone())));
@@ -83,10 +83,10 @@ fn build_bulk_row_condition(row: &BulkUpdateRow) -> Result<Cond> {
     Ok(cond)
 }
 
-fn build_match_expression(column: &str, value: &serde_json::Value) -> SimpleExpr {
-    if value.is_null() {
+fn build_match_expression(column: &str, value: &rmpv::Value) -> SimpleExpr {
+    if value.is_nil() {
         Expr::col(ColumnIdent(column.to_string())).is_null()
     } else {
-        Expr::col(ColumnIdent(column.to_string())).eq(json_to_value(value))
+        Expr::col(ColumnIdent(column.to_string())).eq(rmpv_to_value(value))
     }
 }

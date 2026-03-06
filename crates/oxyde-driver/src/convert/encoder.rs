@@ -109,12 +109,12 @@ pub fn write_bin(buf: &mut Vec<u8>, v: &[u8]) {
 }
 
 #[inline]
-fn write_array_len(buf: &mut Vec<u8>, len: u32) {
+pub fn write_array_len(buf: &mut Vec<u8>, len: u32) {
     rmp::encode::write_array_len(buf, len).unwrap();
 }
 
 #[inline]
-fn write_map_len(buf: &mut Vec<u8>, len: u32) {
+pub fn write_map_len(buf: &mut Vec<u8>, len: u32) {
     rmp::encode::write_map_len(buf, len).unwrap();
 }
 
@@ -148,6 +148,41 @@ pub fn write_json_value(buf: &mut Vec<u8>, val: &serde_json::Value) {
                 write_json_value(buf, v);
             }
         }
+    }
+}
+
+/// Write an rmpv::Value as msgpack (for PK values from INSERT RETURNING).
+pub fn write_rmpv_value(buf: &mut Vec<u8>, val: &rmpv::Value) {
+    match val {
+        rmpv::Value::Nil => write_nil(buf),
+        rmpv::Value::Boolean(b) => write_bool(buf, *b),
+        rmpv::Value::Integer(n) => {
+            if let Some(i) = n.as_i64() {
+                write_i64(buf, i);
+            } else if let Some(u) = n.as_u64() {
+                write_u64(buf, u);
+            } else {
+                write_nil(buf);
+            }
+        }
+        rmpv::Value::F32(f) => write_f64(buf, f64::from(*f)),
+        rmpv::Value::F64(f) => write_f64(buf, *f),
+        rmpv::Value::String(s) => write_str(buf, s.as_str().unwrap_or_default()),
+        rmpv::Value::Binary(b) => write_bin(buf, b),
+        rmpv::Value::Array(arr) => {
+            write_array_len(buf, arr.len() as u32);
+            for v in arr {
+                write_rmpv_value(buf, v);
+            }
+        }
+        rmpv::Value::Map(pairs) => {
+            write_map_len(buf, pairs.len() as u32);
+            for (k, v) in pairs {
+                write_rmpv_value(buf, k);
+                write_rmpv_value(buf, v);
+            }
+        }
+        rmpv::Value::Ext(_, _) => write_nil(buf),
     }
 }
 

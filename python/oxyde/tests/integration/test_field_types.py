@@ -405,14 +405,9 @@ class TestNullRoundTrip:
 
 
 class TestBytesRoundTrip:
-    """bytes is broken: serde_json doesn't support binary.
-
-    Write path fails with "invalid type: byte array, expected any valid JSON value".
-    Will be fixed by B1 (direct rmp encode) or B4.
-    """
+    """bytes round-trip through native msgpack binary."""
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(reason="B4: serde_json cannot represent binary", strict=True)
     async def test_basic(self, db):
         from oxyde.models.registry import register_table
 

@@ -95,7 +95,7 @@ pub fn build_sql(ir: &QueryIR, dialect: Dialect) -> Result<(String, Vec<Value>)>
 
             // Convert params to sea_query Values
             let values = if let Some(params) = &ir.params {
-                params.iter().map(utils::json_to_value).collect()
+                params.iter().map(utils::rmpv_to_value).collect()
             } else {
                 Vec::new()
             };
@@ -111,11 +111,26 @@ mod tests {
     use oxyde_codec::{
         ConflictAction, Filter, FilterNode, JoinColumn, JoinSpec, OnConflict, Operation, QueryIR,
     };
-    use serde_json::json;
     use std::collections::HashMap;
 
+    fn rmpv_int(v: i64) -> rmpv::Value {
+        rmpv::Value::Integer(v.into())
+    }
+
+    fn rmpv_str(v: &str) -> rmpv::Value {
+        rmpv::Value::String(v.into())
+    }
+
+    fn rmpv_null() -> rmpv::Value {
+        rmpv::Value::Nil
+    }
+
+    fn rmpv_arr(vals: Vec<rmpv::Value>) -> rmpv::Value {
+        rmpv::Value::Array(vals)
+    }
+
     /// Helper to create a simple condition filter node
-    fn filter_cond(field: &str, operator: &str, value: serde_json::Value) -> FilterNode {
+    fn filter_cond(field: &str, operator: &str, value: rmpv::Value) -> FilterNode {
         FilterNode::Condition(Filter {
             field: field.into(),
             operator: operator.into(),
@@ -129,7 +144,7 @@ mod tests {
         field: &str,
         column: &str,
         operator: &str,
-        value: serde_json::Value,
+        value: rmpv::Value,
     ) -> FilterNode {
         FilterNode::Condition(Filter {
             field: field.into(),
@@ -158,7 +173,7 @@ mod tests {
         let ir = QueryIR {
             table: "users".into(),
             cols: Some(vec!["id".into()]),
-            filter_tree: Some(filter_cond("id", "=", json!(42))),
+            filter_tree: Some(filter_cond("id", "=", rmpv_int(42))),
             ..Default::default()
         };
         let (sql, params) = build_sql(&ir, Dialect::Postgres).unwrap();
@@ -175,7 +190,7 @@ mod tests {
         let ir = QueryIR {
             table: "widgets".into(),
             cols: Some(vec!["id".into()]),
-            filter_tree: Some(filter_cond("slug", "=", json!("foo"))),
+            filter_tree: Some(filter_cond("slug", "=", rmpv_str("foo"))),
             ..Default::default()
         };
         let (sql, params) = build_sql(&ir, Dialect::Mysql).unwrap();
@@ -188,7 +203,7 @@ mod tests {
         let ir = QueryIR {
             op: Operation::Insert,
             table: "widgets".into(),
-            values: Some(HashMap::from([("name".into(), json!("foo"))])),
+            values: Some(HashMap::from([("name".into(), rmpv_str("foo"))])),
             ..Default::default()
         };
         let (sql, params) = build_sql(&ir, Dialect::Sqlite).unwrap();
@@ -201,7 +216,7 @@ mod tests {
         let ir = QueryIR {
             table: "articles".into(),
             cols: Some(vec!["id".into()]),
-            filter_tree: Some(filter_cond("title", "ILIKE", json!("%rust%"))),
+            filter_tree: Some(filter_cond("title", "ILIKE", rmpv_str("%rust%"))),
             ..Default::default()
         };
         let (sql, params) = build_sql(&ir, Dialect::Postgres).unwrap();
@@ -218,7 +233,11 @@ mod tests {
         let ir = QueryIR {
             table: "numbers".into(),
             cols: Some(vec!["value".into()]),
-            filter_tree: Some(filter_cond("value", "BETWEEN", json!([1, 5]))),
+            filter_tree: Some(filter_cond(
+                "value",
+                "BETWEEN",
+                rmpv_arr(vec![rmpv_int(1), rmpv_int(5)]),
+            )),
             ..Default::default()
         };
         let (sql, _) = build_sql(&ir, Dialect::Postgres).unwrap();
@@ -231,7 +250,7 @@ mod tests {
         let ir = QueryIR {
             table: "entries".into(),
             cols: Some(vec!["id".into()]),
-            filter_tree: Some(filter_cond("deleted_at", "IS NULL", json!(null))),
+            filter_tree: Some(filter_cond("deleted_at", "IS NULL", rmpv_null())),
             ..Default::default()
         };
         let (sql, _) = build_sql(&ir, Dialect::Postgres).unwrap();
@@ -295,7 +314,10 @@ mod tests {
         let ir = QueryIR {
             op: Operation::Insert,
             table: "users".into(),
-            values: Some(HashMap::from([("email".into(), json!("test@example.com"))])),
+            values: Some(HashMap::from([(
+                "email".into(),
+                rmpv_str("test@example.com"),
+            )])),
             on_conflict: Some(OnConflict {
                 columns: vec!["email".into()],
                 action: ConflictAction::Update,
@@ -325,7 +347,7 @@ mod tests {
                 "name",
                 "product_name",
                 "ILIKE",
-                json!("%test%"),
+                rmpv_str("%test%"),
             )),
             ..Default::default()
         };
@@ -343,16 +365,16 @@ mod tests {
             op: Operation::Insert,
             table: "items".into(),
             values: Some(HashMap::from([
-                ("id".into(), json!(1)),
-                ("name".into(), json!("test")),
-                ("count".into(), json!(10)),
+                ("id".into(), rmpv_int(1)),
+                ("name".into(), rmpv_str("test")),
+                ("count".into(), rmpv_int(10)),
             ])),
             on_conflict: Some(OnConflict {
                 columns: vec!["id".into()],
                 action: ConflictAction::Update,
                 update_values: Some(HashMap::from([
-                    ("name".into(), json!("updated")),
-                    ("count".into(), json!(20)),
+                    ("name".into(), rmpv_str("updated")),
+                    ("count".into(), rmpv_int(20)),
                 ])),
             }),
             ..Default::default()
@@ -372,8 +394,8 @@ mod tests {
             op: Operation::Insert,
             table: "items".into(),
             values: Some(HashMap::from([
-                ("id".into(), json!(1)),
-                ("name".into(), json!("test")),
+                ("id".into(), rmpv_int(1)),
+                ("name".into(), rmpv_str("test")),
             ])),
             on_conflict: Some(OnConflict {
                 columns: vec!["id".into()],

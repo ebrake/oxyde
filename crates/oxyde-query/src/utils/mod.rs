@@ -7,4 +7,4 @@ pub mod value;
 // Re-exports for convenience
 pub use identifier::{ColumnIdent, TableIdent};
 pub use placeholder::renumber_postgres_placeholders;
-pub use value::{json_to_simple_expr, json_to_value, json_to_value_typed, parse_expression};
+pub use value::{parse_expression, rmpv_to_simple_expr, rmpv_to_value, rmpv_to_value_typed};

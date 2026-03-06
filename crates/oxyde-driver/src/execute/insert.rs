@@ -12,17 +12,17 @@ use crate::{registry, transaction_registry};
 
 /// Extract PK value from a row by column name.
 /// Tries i64 first, then String (covers UUID, text PKs).
-fn extract_pk<R: Row>(row: &R, pk_col: &str) -> Option<serde_json::Value>
+fn extract_pk<R: Row>(row: &R, pk_col: &str) -> Option<rmpv::Value>
 where
     for<'r> i64: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
     for<'r> String: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
     for<'r> &'r str: sqlx::ColumnIndex<R>,
 {
     if let Ok(v) = row.try_get::<i64, _>(pk_col) {
-        return Some(serde_json::Value::Number(serde_json::Number::from(v)));
+        return Some(rmpv::Value::Integer(rmpv::Integer::from(v)));
     }
     if let Ok(v) = row.try_get::<String, _>(pk_col) {
-        return Some(serde_json::Value::String(v));
+        return Some(rmpv::Value::String(v.into()));
     }
     None
 }
@@ -33,7 +33,7 @@ pub async fn execute_insert_returning(
     sql: &str,
     params: &[Value],
     pk_column: Option<&str>,
-) -> Result<Vec<serde_json::Value>> {
+) -> Result<Vec<rmpv::Value>> {
     let pk_col = pk_column.unwrap_or("id");
     debug!(
         "Executing INSERT RETURNING on '{}': {} ({} params, pk={})",
@@ -58,7 +58,7 @@ pub async fn execute_insert_returning(
                 DriverError::ExecutionError(format!("INSERT RETURNING failed: {}", e))
             })?;
 
-            let ids: Vec<serde_json::Value> = rows
+            let ids: Vec<rmpv::Value> = rows
                 .iter()
                 .filter_map(|row| extract_pk(row, pk_col))
                 .collect();
@@ -80,9 +80,9 @@ pub async fn execute_insert_returning(
             let rows_affected = result.rows_affected() as i64;
             let last_id = result.last_insert_id() as i64;
 
-            let ids: Vec<serde_json::Value> = if rows_affected > 0 && last_id > 0 {
+            let ids: Vec<rmpv::Value> = if rows_affected > 0 && last_id > 0 {
                 (last_id..last_id + rows_affected)
-                    .map(|id| serde_json::Value::Number(serde_json::Number::from(id)))
+                    .map(|id| rmpv::Value::Integer(rmpv::Integer::from(id)))
                     .collect()
             } else {
                 vec![]
@@ -109,7 +109,7 @@ pub async fn execute_insert_returning(
 
             match query.fetch_all(&pool).await {
                 Ok(rows) => {
-                    let ids: Vec<serde_json::Value> = rows
+                    let ids: Vec<rmpv::Value> = rows
                         .iter()
                         .filter_map(|row| extract_pk(row, pk_col))
                         .collect();
@@ -134,9 +134,9 @@ pub async fn execute_insert_returning(
                     let rows_affected = result.rows_affected() as i64;
                     let last_id = result.last_insert_rowid();
 
-                    let ids: Vec<serde_json::Value> = if rows_affected > 0 && last_id > 0 {
+                    let ids: Vec<rmpv::Value> = if rows_affected > 0 && last_id > 0 {
                         (last_id - rows_affected + 1..=last_id)
-                            .map(|id| serde_json::Value::Number(serde_json::Number::from(id)))
+                            .map(|id| rmpv::Value::Integer(rmpv::Integer::from(id)))
                             .collect()
                     } else {
                         vec![]
@@ -159,7 +159,7 @@ pub async fn execute_insert_returning_in_transaction(
     sql: &str,
     params: &[Value],
     pk_column: Option<&str>,
-) -> Result<Vec<serde_json::Value>> {
+) -> Result<Vec<rmpv::Value>> {
     let pk_col = pk_column.unwrap_or("id");
     let registry = transaction_registry();
     let arc = registry
@@ -191,7 +191,7 @@ pub async fn execute_insert_returning_in_transaction(
                 DriverError::ExecutionError(format!("INSERT RETURNING failed: {}", e))
             })?;
 
-            let ids: Vec<serde_json::Value> = rows
+            let ids: Vec<rmpv::Value> = rows
                 .iter()
                 .filter_map(|row| extract_pk(row, pk_col))
                 .collect();
@@ -213,9 +213,9 @@ pub async fn execute_insert_returning_in_transaction(
             let rows_affected = result.rows_affected() as i64;
             let last_id = result.last_insert_id() as i64;
 
-            let ids: Vec<serde_json::Value> = if rows_affected > 0 && last_id > 0 {
+            let ids: Vec<rmpv::Value> = if rows_affected > 0 && last_id > 0 {
                 (last_id..last_id + rows_affected)
-                    .map(|id| serde_json::Value::Number(serde_json::Number::from(id)))
+                    .map(|id| rmpv::Value::Integer(rmpv::Integer::from(id)))
                     .collect()
             } else {
                 vec![]
@@ -242,7 +242,7 @@ pub async fn execute_insert_returning_in_transaction(
 
             match query.fetch_all(conn.as_mut()).await {
                 Ok(rows) => {
-                    let ids: Vec<serde_json::Value> = rows
+                    let ids: Vec<rmpv::Value> = rows
                         .iter()
                         .filter_map(|row| extract_pk(row, pk_col))
                         .collect();
@@ -267,9 +267,9 @@ pub async fn execute_insert_returning_in_transaction(
                     let rows_affected = result.rows_affected() as i64;
                     let last_id = result.last_insert_rowid();
 
-                    let ids: Vec<serde_json::Value> = if rows_affected > 0 && last_id > 0 {
+                    let ids: Vec<rmpv::Value> = if rows_affected > 0 && last_id > 0 {
                         (last_id - rows_affected + 1..=last_id)
-                            .map(|id| serde_json::Value::Number(serde_json::Number::from(id)))
+                            .map(|id| rmpv::Value::Integer(rmpv::Integer::from(id)))
                             .collect()
                     } else {
                         vec![]

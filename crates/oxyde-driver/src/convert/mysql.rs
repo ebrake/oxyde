@@ -2,8 +2,6 @@
 //!
 //! Encodes MySQL row cells directly to msgpack bytes.
 
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use base64::Engine;
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use sqlx::{mysql::MySqlRow, Row};
 
@@ -50,7 +48,7 @@ impl CellEncoder for MySqlEncoder {
             }
             "bytes" => {
                 match row.try_get::<Option<Vec<u8>>, _>(idx) {
-                    Ok(Some(v)) => write_str(buf, &BASE64_STANDARD.encode(v)),
+                    Ok(Some(v)) => write_bin(buf, &v),
                     Ok(None) => write_nil(buf),
                     Err(_) => fallback_str(buf, row, idx),
                 }
@@ -156,7 +154,7 @@ impl CellEncoder for MySqlEncoder {
             },
             name if name.contains("BLOB") || name.contains("BINARY") => {
                 match row.try_get::<Option<Vec<u8>>, _>(idx) {
-                    Ok(Some(v)) => write_str(buf, &BASE64_STANDARD.encode(v)),
+                    Ok(Some(v)) => write_bin(buf, &v),
                     Ok(None) => write_nil(buf),
                     Err(_) => fallback_str(buf, row, idx),
                 }

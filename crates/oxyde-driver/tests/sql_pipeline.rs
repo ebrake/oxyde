@@ -3,7 +3,6 @@ use oxyde_driver::{
     close_pool, execute_query_columnar, execute_statement, init_pool, PoolSettings,
 };
 use oxyde_query::{build_sql, Dialect};
-use serde_json::json;
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -44,8 +43,11 @@ async fn sqlite_end_to_end_pipeline() {
     .unwrap();
 
     let mut insert_values = HashMap::new();
-    insert_values.insert("id".to_string(), json!(1));
-    insert_values.insert("name".to_string(), json!("Ada Lovelace"));
+    insert_values.insert("id".to_string(), rmpv::Value::Integer(1.into()));
+    insert_values.insert(
+        "name".to_string(),
+        rmpv::Value::String("Ada Lovelace".into()),
+    );
     let insert_ir = QueryIR {
         proto: IR_PROTO_VERSION,
         op: Operation::Insert,
@@ -91,7 +93,7 @@ async fn sqlite_end_to_end_pipeline() {
         filter_tree: Some(FilterNode::Condition(Filter {
             field: "id".into(),
             operator: "=".into(),
-            value: json!(1),
+            value: rmpv::Value::Integer(1.into()),
             column: None,
         })),
         limit: None,

@@ -156,8 +156,11 @@ pub use execute::query::{
     execute_query_columnar_in_transaction, execute_statement, execute_statement_in_transaction,
 };
 
-// Encoder types needed by callers
-pub use convert::encoder::RelationInfo;
+// Encoder types and msgpack write helpers
+pub use convert::encoder::{
+    write_array_len, write_json_value, write_map_len, write_rmpv_value, write_str, write_u64,
+    RelationInfo,
+};
 
 // INSERT RETURNING
 pub use execute::insert::{execute_insert_returning, execute_insert_returning_in_transaction};

@@ -2,8 +2,6 @@
 //!
 //! Encodes PostgreSQL row cells directly to msgpack bytes.
 
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use base64::Engine;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use sqlx::{postgres::PgRow, Row};
 use uuid::Uuid;
@@ -55,7 +53,7 @@ impl CellEncoder for PgEncoder {
             }
             "bytes" => {
                 match row.try_get::<Option<Vec<u8>>, _>(idx) {
-                    Ok(Some(v)) => write_str(buf, &BASE64_STANDARD.encode(v)),
+                    Ok(Some(v)) => write_bin(buf, &v),
                     Ok(None) => write_nil(buf),
                     Err(_) => fallback_str(buf, row, idx),
                 }
@@ -190,7 +188,7 @@ impl CellEncoder for PgEncoder {
                 }
             }
             "BYTEA" => match row.try_get::<Option<Vec<u8>>, _>(idx) {
-                Ok(Some(v)) => write_str(buf, &BASE64_STANDARD.encode(v)),
+                Ok(Some(v)) => write_bin(buf, &v),
                 Ok(None) => write_nil(buf),
                 Err(_) => fallback_str(buf, row, idx),
             },

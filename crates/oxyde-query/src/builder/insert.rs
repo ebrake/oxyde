@@ -6,7 +6,7 @@ use sea_query::{
 };
 
 use crate::error::{QueryError, Result};
-use crate::utils::{json_to_simple_expr, json_to_value_typed, ColumnIdent, TableIdent};
+use crate::utils::{rmpv_to_simple_expr, rmpv_to_value_typed, ColumnIdent, TableIdent};
 use crate::Dialect;
 
 /// Build INSERT query from QueryIR
@@ -29,11 +29,11 @@ pub fn build_insert(ir: &QueryIR, dialect: Dialect) -> Result<(String, Vec<Value
 
         for (col, val) in values {
             columns.push(ColumnIdent(col.clone()));
-            if let Some(expr) = json_to_simple_expr(val)? {
+            if let Some(expr) = rmpv_to_simple_expr(val)? {
                 vals.push(expr);
             } else {
                 let col_type = get_col_type(col);
-                vals.push(Expr::val(json_to_value_typed(val, col_type)).into());
+                vals.push(Expr::val(rmpv_to_value_typed(val, col_type)).into());
             }
         }
 
@@ -66,11 +66,11 @@ pub fn build_insert(ir: &QueryIR, dialect: Dialect) -> Result<(String, Vec<Value
                         col.0
                     ))
                 })?;
-                if let Some(expr) = json_to_simple_expr(val)? {
+                if let Some(expr) = rmpv_to_simple_expr(val)? {
                     vals.push(expr);
                 } else {
                     let col_type = get_col_type(&col.0);
-                    vals.push(Expr::val(json_to_value_typed(val, col_type)).into());
+                    vals.push(Expr::val(rmpv_to_value_typed(val, col_type)).into());
                 }
             }
             query.values(vals)?;
@@ -112,13 +112,13 @@ pub fn build_insert(ir: &QueryIR, dialect: Dialect) -> Result<(String, Vec<Value
 
                         let mut conflict = sea_query::OnConflict::columns(target_cols);
                         for (col, val) in update_vals {
-                            if let Some(expr) = json_to_simple_expr(val)? {
+                            if let Some(expr) = rmpv_to_simple_expr(val)? {
                                 conflict.value(ColumnIdent(col.clone()), expr);
                             } else {
                                 let col_type = get_col_type(col);
                                 conflict.value(
                                     ColumnIdent(col.clone()),
-                                    Expr::val(json_to_value_typed(val, col_type)),
+                                    Expr::val(rmpv_to_value_typed(val, col_type)),
                                 );
                             }
                         }
@@ -172,13 +172,13 @@ pub fn build_insert(ir: &QueryIR, dialect: Dialect) -> Result<(String, Vec<Value
 
                         let mut conflict = sea_query::OnConflict::new();
                         for (col, val) in update_vals {
-                            if let Some(expr) = json_to_simple_expr(val)? {
+                            if let Some(expr) = rmpv_to_simple_expr(val)? {
                                 conflict.value(ColumnIdent(col.clone()), expr);
                             } else {
                                 let col_type = get_col_type(col);
                                 conflict.value(
                                     ColumnIdent(col.clone()),
-                                    Expr::val(json_to_value_typed(val, col_type)),
+                                    Expr::val(rmpv_to_value_typed(val, col_type)),
                                 );
                             }
                         }

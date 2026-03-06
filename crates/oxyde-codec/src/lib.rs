@@ -95,7 +95,7 @@ pub enum Operation {
 pub struct Filter {
     pub field: String,
     pub operator: String,
-    pub value: serde_json::Value,
+    pub value: rmpv::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub column: Option<String>,
 }
@@ -160,7 +160,7 @@ pub struct OnConflict {
     pub action: ConflictAction,
     /// Update values (only for action=Update)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub update_values: Option<std::collections::HashMap<String, serde_json::Value>>,
+    pub update_values: Option<std::collections::HashMap<String, rmpv::Value>>,
 }
 
 /// Join column projection
@@ -213,11 +213,11 @@ pub struct QueryIR {
 
     // Single row values (for simple INSERT/UPDATE)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub values: Option<HashMap<String, serde_json::Value>>,
+    pub values: Option<HashMap<String, rmpv::Value>>,
 
     // Bulk values (for bulk INSERT)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub bulk_values: Option<Vec<HashMap<String, serde_json::Value>>>,
+    pub bulk_values: Option<Vec<HashMap<String, rmpv::Value>>>,
 
     // Bulk update payload
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -278,7 +278,7 @@ pub struct QueryIR {
 
     // Raw SQL parameters (for operation = Raw)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub params: Option<Vec<serde_json::Value>>,
+    pub params: Option<Vec<rmpv::Value>>,
 
     // Primary key column name for INSERT RETURNING
     // Used to generate proper RETURNING clause instead of hardcoded "id"
@@ -288,8 +288,8 @@ pub struct QueryIR {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BulkUpdateRow {
-    pub filters: HashMap<String, serde_json::Value>,
-    pub values: HashMap<String, serde_json::Value>,
+    pub filters: HashMap<String, rmpv::Value>,
+    pub values: HashMap<String, rmpv::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
