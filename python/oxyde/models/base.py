@@ -821,7 +821,7 @@ class Model(BaseModel, metaclass=OxydeModelMeta):
         )
 
         # Update all fields from the refreshed instance
-        for field_name in self.model_fields.keys():
+        for field_name in type(self).model_fields:
             setattr(self, field_name, getattr(refreshed, field_name))
 
         return self
