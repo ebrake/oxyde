@@ -277,8 +277,6 @@ def build_update_ir(
         "table": table,
     }
     if values:
-        if not values:
-            raise ValueError("UPDATE requires at least one value")
         payload["values"] = dict(values)
     if bulk_update:
         normalized_rows: list[dict[str, Any]] = []

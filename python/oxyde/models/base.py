@@ -820,8 +820,11 @@ class Model(BaseModel, metaclass=OxydeModelMeta):
             client=client, using=using, **{pk_field: pk_value}
         )
 
-        # Update all fields from the refreshed instance
+        # Update all DB fields from the refreshed instance (skip virtual relations)
         for field_name in type(self).model_fields:
+            meta = type(self)._db_meta.field_metadata.get(field_name)
+            if meta and (meta.extra.get("reverse_fk") or meta.extra.get("m2m")):
+                continue
             setattr(self, field_name, getattr(refreshed, field_name))
 
         return self
