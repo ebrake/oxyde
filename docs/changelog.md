@@ -4,7 +4,7 @@ All notable changes to Oxyde are documented here.
 
 ---
 
-## 0.5.0
+## 0.5.0 - Unreleased
 
 ### Breaking Changes
 
@@ -64,7 +64,7 @@ The `batch_size` parameter is no longer needed since batching is handled by the 
 
 ---
 
-## 0.4.0
+## 0.4.0 - 2026-02-23
 
 ### Breaking Changes
 
