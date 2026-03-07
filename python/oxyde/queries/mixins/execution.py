@@ -139,6 +139,7 @@ class ExecutionMixin:
         """
         result_bytes = await self.fetch_msgpack(client)
         data = msgpack.unpackb(result_bytes, raw=False)
+        del result_bytes
         if isinstance(data, (list, tuple)) and len(data) == 2:
             first, second = data
             if isinstance(first, list) and all(isinstance(c, str) for c in first):
@@ -168,6 +169,7 @@ class ExecutionMixin:
 
         result_bytes = await self.fetch_msgpack(client)
         data = msgpack.unpackb(result_bytes, raw=False, strict_map_key=False)
+        del result_bytes
 
         col_types = model_class._db_meta.col_types
 
@@ -180,8 +182,10 @@ class ExecutionMixin:
             # Dedup format: [main_columns, main_rows, relations_map]
             main_columns, main_rows, relations_map = data
             rows = [dict(zip(main_columns, row)) for row in main_rows]
+            del main_rows, data
             _convert_timedelta_columns(rows, col_types)
             models = adapter.validate_python(rows)
+            del rows
             self._hydrate_from_dedup(models, relations_map)
         elif (
             isinstance(data, (list, tuple))
@@ -192,12 +196,15 @@ class ExecutionMixin:
             # Columnar format: [columns, rows] (columns may be empty for 0 rows)
             columns, row_values = data
             rows = [dict(zip(columns, row)) for row in row_values]
+            del row_values, data
             _convert_timedelta_columns(rows, col_types)
             models = adapter.validate_python(rows)
+            del rows
         else:
             rows = data if isinstance(data, list) else []
             _convert_timedelta_columns(rows, col_types)
             models = adapter.validate_python(rows)
+            del rows
 
         if self._prefetch_paths:
             await self._run_prefetch(models, client)
