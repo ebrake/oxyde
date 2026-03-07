@@ -59,7 +59,8 @@ pub(crate) fn execute<'py>(
         let results = match ir.op {
             oxyde_codec::Operation::Select | oxyde_codec::Operation::Raw => {
                 let exec_start = Instant::now();
-                let (result, num_rows) = if let Some(joins) = &ir.joins {
+                let is_scalar = ir.count.unwrap_or(false) || ir.exists.unwrap_or(false);
+                let (result, num_rows) = if let (false, Some(joins)) = (is_scalar, &ir.joins) {
                     let relations: Vec<RelationInfo> = joins
                         .iter()
                         .map(|j| RelationInfo {
@@ -186,7 +187,8 @@ pub(crate) fn execute_in_transaction<'py>(
 
         let results = match ir.op {
             oxyde_codec::Operation::Select | oxyde_codec::Operation::Raw => {
-                let (result, _num_rows) = if let Some(joins) = &ir.joins {
+                let is_scalar = ir.count.unwrap_or(false) || ir.exists.unwrap_or(false);
+                let (result, _num_rows) = if let (false, Some(joins)) = (is_scalar, &ir.joins) {
                     let relations: Vec<RelationInfo> = joins
                         .iter()
                         .map(|j| RelationInfo {

@@ -15,6 +15,24 @@ class TestAggregateShortcuts:
         assert count == 4
 
     @pytest.mark.asyncio
+    async def test_count_with_join(self, db):
+        """count() must work when join() is applied (no dedup panic)."""
+        count = await Post.objects.join("author").count(client=db)
+        assert count == 6
+
+    @pytest.mark.asyncio
+    async def test_count_with_join_and_filter(self, db):
+        """count() with join + filter on joined field."""
+        count = await Post.objects.join("author").filter(author__name="Alice").count(client=db)
+        assert count == 2
+
+    @pytest.mark.asyncio
+    async def test_exists_with_join(self, db):
+        """exists() must work when join() is applied (no dedup panic)."""
+        exists = await Post.objects.join("author").exists(client=db)
+        assert exists is True
+
+    @pytest.mark.asyncio
     async def test_sum(self, db):
         total = await Post.objects.filter(published=True).sum("views", client=db)
         assert total == 435  # 120 + 35 + 80 + 200
