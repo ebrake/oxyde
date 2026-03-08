@@ -71,6 +71,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     ClassVar,
+    ForwardRef,
     get_args,
     get_origin,
     get_type_hints,
@@ -161,7 +162,7 @@ class OxydeModelMeta(ModelMetaclass):
                 # Check if it's a model class (will be resolved later if forward ref)
                 if isinstance(inner_type, type) and issubclass(inner_type, BaseModel):
                     pending_fk_fields.append((field_name, annotation, field_info))
-                elif isinstance(inner_type, str):
+                elif isinstance(inner_type, (str, ForwardRef)):
                     # Forward reference - also track for later resolution
                     pending_fk_fields.append((field_name, annotation, field_info))
 

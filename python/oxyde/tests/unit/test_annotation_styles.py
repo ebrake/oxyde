@@ -98,9 +98,6 @@ class _FKOptStrBook(Model):
 
 
 class TestFKOptionalStringRef:
-    @pytest.mark.xfail(
-        reason="ForwardRef from Optional['Model'] not handled in metaclass yet"
-    )
     def test_fk_detected(self):
         registered_tables()
         assert "author_id" in _FKOptStrBook.model_fields
