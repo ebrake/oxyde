@@ -130,47 +130,45 @@ class OxydeModelMeta(ModelMetaclass):
 
     def __new__(mcs, name: str, bases: tuple, namespace: dict, **kwargs: Any):
         """Create new Model class with auto-configured relation fields."""
-        # Track FK fields that need column generation (resolved lazily)
-        pending_fk_fields: list[tuple[str, Any, FieldInfo | None]] = []
-
         # Auto-add default_factory=list for relation fields BEFORE Pydantic
         # This ensures fields with db_reverse_fk or db_m2m are not required
-        annotations = namespace.get("__annotations__", {})
-        for field_name, annotation in list(annotations.items()):
-            field_info = namespace.get(field_name)
-            if isinstance(field_info, OxydeFieldInfo):
-                has_reverse_fk = getattr(field_info, "db_reverse_fk", None)
-                has_m2m = getattr(field_info, "db_m2m", False)
+        # Uses Field params only — no annotation reading needed here
+        for value in namespace.values():
+            if isinstance(value, OxydeFieldInfo):
+                has_reverse_fk = getattr(value, "db_reverse_fk", None)
+                has_m2m = getattr(value, "db_m2m", False)
                 if has_reverse_fk or has_m2m:
-                    # Auto-add default_factory=list if no default specified
                     if (
-                        field_info.default is PydanticUndefined
-                        and field_info.default_factory is None
+                        value.default is PydanticUndefined
+                        and value.default_factory is None
                     ):
-                        field_info.default_factory = list
+                        value.default_factory = list
 
-            # Detect FK fields (annotation is Model subclass)
-            # Skip reverse FK and M2M fields
+        cls = super().__new__(mcs, name, bases, namespace, **kwargs)
+
+        # Detect FK fields from Pydantic's processed model_fields
+        # This works on all Python versions (3.10-3.14+) because Pydantic
+        # has already resolved annotations regardless of lazy/eager evaluation
+        pending_fk_fields: list[tuple[str, Any, FieldInfo | None]] = []
+        for field_name, field_info in cls.model_fields.items():
             is_reverse_fk = isinstance(field_info, OxydeFieldInfo) and getattr(
                 field_info, "db_reverse_fk", None
             )
             is_m2m = isinstance(field_info, OxydeFieldInfo) and getattr(
                 field_info, "db_m2m", False
             )
-            if not is_reverse_fk and not is_m2m:
-                inner_type, _ = _unwrap_optional(annotation)
-                # Check if it's a model class (will be resolved later if forward ref)
-                if isinstance(inner_type, type) and issubclass(inner_type, BaseModel):
-                    pending_fk_fields.append((field_name, annotation, field_info))
-                elif isinstance(inner_type, (str, ForwardRef)):
-                    # Forward reference - also track for later resolution
-                    pending_fk_fields.append((field_name, annotation, field_info))
+            if is_reverse_fk or is_m2m:
+                continue
 
-        # Store pending FK fields for lazy resolution (__dunder__ avoids Pydantic)
-        namespace["__pending_fk_fields__"] = pending_fk_fields
-        namespace["__fk_fields_resolved__"] = False
+            annotation = field_info.annotation
+            inner_type, _ = _unwrap_optional(annotation)
+            if isinstance(inner_type, type) and issubclass(inner_type, BaseModel):
+                pending_fk_fields.append((field_name, annotation, field_info))
+            elif isinstance(inner_type, (str, ForwardRef)):
+                pending_fk_fields.append((field_name, annotation, field_info))
 
-        cls = super().__new__(mcs, name, bases, namespace, **kwargs)
+        cls.__pending_fk_fields__ = pending_fk_fields
+        cls.__fk_fields_resolved__ = False
 
         # Finalize all pending models AFTER Pydantic completes
         # (model_fields is now populated). Resolves FKs, parses metadata, caches PK.
