@@ -187,54 +187,7 @@ pub fn write_rmpv_value(buf: &mut Vec<u8>, val: &rmpv::Value) {
 }
 
 // ── Generic encode functions ───────────────────────────────────────────
-
-/// Write column names as a msgpack array.
-fn encode_column_names(buf: &mut Vec<u8>, columns: &[ColumnMeta]) {
-    write_array_len(buf, columns.len() as u32);
-    for col in columns {
-        write_str(buf, &col.name);
-    }
-}
-
-/// Write row data as a msgpack array of arrays.
-fn encode_row_data<E: CellEncoder>(buf: &mut Vec<u8>, rows: &[E::Row], columns: &[ColumnMeta]) {
-    write_array_len(buf, rows.len() as u32);
-    for row in rows {
-        write_array_len(buf, columns.len() as u32);
-        for (i, col) in columns.iter().enumerate() {
-            E::encode_cell(buf, row, i, col);
-        }
-    }
-}
-
-/// Encode rows in columnar format: `[column_names, [[row_values], ...]]`
-///
-/// Returns `(msgpack_bytes, row_count)`.
-pub fn encode_rows_columnar<E: CellEncoder>(
-    rows: &[E::Row],
-    col_types: Option<&HashMap<String, String>>,
-) -> (Vec<u8>, usize)
-where
-    <<E::Row as Row>::Database as Database>::Column: Column,
-{
-    if rows.is_empty() {
-        let mut buf = Vec::with_capacity(4);
-        write_array_len(&mut buf, 2);
-        write_array_len(&mut buf, 0);
-        write_array_len(&mut buf, 0);
-        return (buf, 0);
-    }
-
-    let columns = E::extract_columns(&rows[0], col_types);
-    let num_rows = rows.len();
-
-    let mut buf = Vec::with_capacity(num_rows * columns.len() * 16);
-    write_array_len(&mut buf, 2);
-    encode_column_names(&mut buf, &columns);
-    encode_row_data::<E>(&mut buf, rows, &columns);
-
-    (buf, num_rows)
-}
+use futures::StreamExt;
 
 /// Info about a JOIN relation for dedup encoding.
 pub struct RelationInfo {
@@ -254,223 +207,243 @@ fn encode_pk_cell<E: CellEncoder>(row: &E::Row, col_idx: usize, col_meta: &Colum
     pk_buf
 }
 
-/// Encode rows with JOIN dedup: `[main_columns, main_rows, relations_map]`
+/// Encode rows from a stream using columnar format (and optionally dedup for JOINs).
 ///
-/// - `main_columns`/`main_rows`: only columns without any relation prefix
-/// - `relations_map`: `{prefix: {"columns": [...], "data": {pk: [values]}, "refs": [pk...]}}`
-///
-/// Returns `(msgpack_bytes, main_row_count)`.
-pub fn encode_rows_dedup<E: CellEncoder>(
-    rows: &[E::Row],
+/// Returns `(msgpack_bytes, row_count)`.
+pub async fn encode_stream<E, S>(
+    mut stream: S,
     col_types: Option<&HashMap<String, String>>,
-    relations: &[RelationInfo],
-) -> (Vec<u8>, usize)
+    relations: Option<&[RelationInfo]>,
+) -> Result<(Vec<u8>, usize), sqlx::Error>
 where
+    E: CellEncoder,
+    S: futures::Stream<Item = Result<E::Row, sqlx::Error>> + Unpin,
     <<E::Row as Row>::Database as Database>::Column: Column,
 {
-    if rows.is_empty() {
-        let mut buf = Vec::with_capacity(8);
-        write_array_len(&mut buf, 3);
-        write_array_len(&mut buf, 0);
-        write_array_len(&mut buf, 0);
-        write_map_len(&mut buf, 0);
-        return (buf, 0);
-    }
+    let first_row = match stream.next().await {
+        Some(Ok(row)) => row,
+        Some(Err(e)) => return Err(e),
+        None => {
+            let has_rels = relations.is_some_and(|r| !r.is_empty());
+            let mut buf = Vec::with_capacity(8);
+            if has_rels {
+                write_array_len(&mut buf, 3);
+                write_array_len(&mut buf, 0);
+                write_array_len(&mut buf, 0);
+                write_map_len(&mut buf, 0);
+            } else {
+                write_array_len(&mut buf, 2);
+                write_array_len(&mut buf, 0);
+                write_array_len(&mut buf, 0);
+            }
+            return Ok((buf, 0));
+        }
+    };
 
-    let all_columns = E::extract_columns(&rows[0], col_types);
-
-    // ── Partition columns into main vs relation groups ────────────────
+    let all_columns = E::extract_columns(&first_row, col_types);
+    let rels = relations.unwrap_or(&[]);
+    let has_rels = !rels.is_empty();
 
     let mut main_indices: Vec<usize> = Vec::new();
     let mut main_columns: Vec<&ColumnMeta> = Vec::new();
 
     struct RelGroup<'a> {
         prefix: &'a str,
-        pk_col_idx: usize, // index in all_columns
+        pk_col_idx: usize,
         col_indices: Vec<usize>,
         col_metas: Vec<&'a ColumnMeta>,
         stripped_names: Vec<String>,
+        seen: std::collections::HashSet<Vec<u8>>,
+        data_buf: Vec<u8>,
+        refs_buf: Vec<u8>,
     }
 
-    let prefixes_sep: Vec<String> = relations
-        .iter()
-        .map(|r| format!("{}__", r.prefix))
-        .collect();
+    let mut rel_groups: Vec<RelGroup<'_>> = Vec::new();
 
-    // Temporary: collect pk_col_idx per relation (filled below)
-    let mut rel_groups: Vec<RelGroup<'_>> = relations
-        .iter()
-        .map(|ri| RelGroup {
-            prefix: &ri.prefix,
-            pk_col_idx: usize::MAX,
-            col_indices: Vec::new(),
-            col_metas: Vec::new(),
-            stripped_names: Vec::new(),
-        })
-        .collect();
+    if has_rels {
+        let prefixes_sep: Vec<String> = rels.iter().map(|r| format!("{}__", r.prefix)).collect();
 
-    for (idx, col) in all_columns.iter().enumerate() {
-        let mut matched = false;
-        for (gi, psep) in prefixes_sep.iter().enumerate() {
-            if col.name.starts_with(psep) {
-                if col.name == relations[gi].pk_col {
-                    rel_groups[gi].pk_col_idx = idx;
+        for ri in rels {
+            rel_groups.push(RelGroup {
+                prefix: &ri.prefix,
+                pk_col_idx: usize::MAX,
+                col_indices: Vec::new(),
+                col_metas: Vec::new(),
+                stripped_names: Vec::new(),
+                seen: std::collections::HashSet::new(),
+                data_buf: Vec::new(),
+                refs_buf: Vec::new(),
+            });
+        }
+
+        for (idx, col) in all_columns.iter().enumerate() {
+            let mut matched = false;
+            for (gi, psep) in prefixes_sep.iter().enumerate() {
+                if col.name.starts_with(psep) {
+                    if col.name == rels[gi].pk_col {
+                        rel_groups[gi].pk_col_idx = idx;
+                    }
+                    rel_groups[gi].col_indices.push(idx);
+                    rel_groups[gi].col_metas.push(col);
+                    rel_groups[gi]
+                        .stripped_names
+                        .push(col.name[psep.len()..].to_string());
+                    matched = true;
+                    break;
                 }
-                rel_groups[gi].col_indices.push(idx);
-                rel_groups[gi].col_metas.push(col);
-                rel_groups[gi]
-                    .stripped_names
-                    .push(col.name[psep.len()..].to_string());
-                matched = true;
-                break;
+            }
+            if !matched {
+                main_indices.push(idx);
+                main_columns.push(col);
             }
         }
-        if !matched {
+    } else {
+        for (idx, col) in all_columns.iter().enumerate() {
             main_indices.push(idx);
             main_columns.push(col);
         }
     }
 
-    // ── Pass 1: scan rows, collect unique PKs and refs ───────────────
+    let mut main_rows_buf = Vec::new();
+    let mut num_rows = 0;
 
-    struct RelScan {
-        seen: HashMap<Vec<u8>, usize>, // encoded PK bytes → index in unique_pks
-        unique_pk_bytes: Vec<Vec<u8>>, // ordered unique PK msgpack bytes
-        first_row_idx: Vec<usize>,     // index of first row for each unique PK
-        refs: Vec<Option<usize>>,      // per main row: index into unique_pk_bytes
-    }
+    let mut process_row = |row: &E::Row, num_rows: &mut usize| {
+        *num_rows += 1;
 
-    let mut rel_scans: Vec<RelScan> = rel_groups
-        .iter()
-        .map(|_| RelScan {
-            seen: HashMap::new(),
-            unique_pk_bytes: Vec::new(),
-            first_row_idx: Vec::new(),
-            refs: Vec::with_capacity(rows.len()),
-        })
-        .collect();
+        write_array_len(&mut main_rows_buf, main_indices.len() as u32);
+        for (pos, &idx) in main_indices.iter().enumerate() {
+            E::encode_cell(&mut main_rows_buf, row, idx, main_columns[pos]);
+        }
 
-    for (row_idx, row) in rows.iter().enumerate() {
-        for (gi, group) in rel_groups.iter().enumerate() {
-            let pk_bytes =
-                encode_pk_cell::<E>(row, group.pk_col_idx, &all_columns[group.pk_col_idx]);
+        if has_rels {
+            for group in rel_groups.iter_mut() {
+                let pk_bytes =
+                    encode_pk_cell::<E>(row, group.pk_col_idx, &all_columns[group.pk_col_idx]);
 
-            if pk_bytes.len() == 1 && pk_bytes[0] == MSGPACK_NIL {
-                // NULL PK (LEFT JOIN produced no match)
-                rel_scans[gi].refs.push(None);
-            } else {
-                let scan = &mut rel_scans[gi];
-                let unique_idx = if let Some(&idx) = scan.seen.get(&pk_bytes) {
-                    idx
+                if pk_bytes.len() == 1 && pk_bytes[0] == MSGPACK_NIL {
+                    write_nil(&mut group.refs_buf);
                 } else {
-                    let idx = scan.unique_pk_bytes.len();
-                    scan.seen.insert(pk_bytes.clone(), idx);
-                    scan.unique_pk_bytes.push(pk_bytes);
-                    scan.first_row_idx.push(row_idx);
-                    idx
-                };
-                scan.refs.push(Some(unique_idx));
+                    if group.seen.insert(pk_bytes.clone()) {
+                        group.data_buf.extend_from_slice(&pk_bytes);
+                        write_array_len(&mut group.data_buf, group.col_indices.len() as u32);
+                        for (pos, &idx) in group.col_indices.iter().enumerate() {
+                            E::encode_cell(&mut group.data_buf, row, idx, group.col_metas[pos]);
+                        }
+                    }
+                    group.refs_buf.extend_from_slice(&pk_bytes);
+                }
             }
         }
+    };
+
+    process_row(&first_row, &mut num_rows);
+
+    while let Some(row_res) = stream.next().await {
+        let row = row_res?;
+        process_row(&row, &mut num_rows);
     }
 
-    // ── Pass 2: encode ───────────────────────────────────────────────
+    let mut buf = Vec::with_capacity(main_rows_buf.len() + 1024);
+    if has_rels {
+        write_array_len(&mut buf, 3);
+    } else {
+        write_array_len(&mut buf, 2);
+    }
 
-    let num_rows = rows.len();
-    let mut buf = Vec::with_capacity(num_rows * main_columns.len() * 16 + 256);
-
-    // [main_columns, main_rows, relations]
-    write_array_len(&mut buf, 3);
-
-    // main_columns
     write_array_len(&mut buf, main_columns.len() as u32);
     for col in &main_columns {
         write_str(&mut buf, &col.name);
     }
 
-    // main_rows
     write_array_len(&mut buf, num_rows as u32);
-    for row in rows {
-        write_array_len(&mut buf, main_indices.len() as u32);
-        for (pos, &idx) in main_indices.iter().enumerate() {
-            E::encode_cell(&mut buf, row, idx, main_columns[pos]);
+    buf.extend_from_slice(&main_rows_buf);
+
+    if has_rels {
+        write_map_len(&mut buf, rel_groups.len() as u32);
+        for group in rel_groups {
+            write_str(&mut buf, group.prefix);
+            write_map_len(&mut buf, 3);
+
+            write_str(&mut buf, "columns");
+            write_array_len(&mut buf, group.stripped_names.len() as u32);
+            for name in &group.stripped_names {
+                write_str(&mut buf, name);
+            }
+
+            write_str(&mut buf, "data");
+            write_map_len(&mut buf, group.seen.len() as u32);
+            buf.extend_from_slice(&group.data_buf);
+
+            write_str(&mut buf, "refs");
+            write_array_len(&mut buf, num_rows as u32);
+            buf.extend_from_slice(&group.refs_buf);
         }
     }
 
-    // relations map
-    write_map_len(&mut buf, rel_groups.len() as u32);
-    for (gi, group) in rel_groups.iter().enumerate() {
-        let scan = &rel_scans[gi];
-
-        write_str(&mut buf, group.prefix);
-        write_map_len(&mut buf, 3);
-
-        // "columns"
-        write_str(&mut buf, "columns");
-        write_array_len(&mut buf, group.stripped_names.len() as u32);
-        for name in &group.stripped_names {
-            write_str(&mut buf, name);
-        }
-
-        // "data": {pk_bytes: [row_values]}
-        write_str(&mut buf, "data");
-        write_map_len(&mut buf, scan.unique_pk_bytes.len() as u32);
-        for (ui, pk_bytes) in scan.unique_pk_bytes.iter().enumerate() {
-            // Key: PK value (already encoded msgpack bytes)
-            buf.extend_from_slice(pk_bytes);
-            // Value: relation row from first occurrence
-            let first_row = &rows[scan.first_row_idx[ui]];
-            write_array_len(&mut buf, group.col_indices.len() as u32);
-            for (pos, &idx) in group.col_indices.iter().enumerate() {
-                E::encode_cell(&mut buf, first_row, idx, group.col_metas[pos]);
-            }
-        }
-
-        // "refs": [pk_bytes, pk_bytes, nil, ...]
-        write_str(&mut buf, "refs");
-        write_array_len(&mut buf, scan.refs.len() as u32);
-        for r in &scan.refs {
-            match r {
-                Some(ui) => buf.extend_from_slice(&scan.unique_pk_bytes[*ui]),
-                None => write_nil(&mut buf),
-            }
-        }
-    }
-
-    (buf, num_rows)
+    Ok((buf, num_rows))
 }
 
-/// Encode rows as a mutation-with-returning result:
+/// Encode rows from a stream as a mutation-with-returning result:
 /// `{"affected": N, "columns": [...], "rows": [[...], ...]}`
-pub fn encode_mutation_returning<E: CellEncoder>(
-    rows: &[E::Row],
+pub async fn encode_stream_mutation_returning<E, S>(
+    mut stream: S,
     col_types: Option<&HashMap<String, String>>,
-) -> Vec<u8>
+) -> Result<Vec<u8>, sqlx::Error>
 where
+    E: CellEncoder,
+    S: futures::Stream<Item = Result<E::Row, sqlx::Error>> + Unpin,
     <<E::Row as Row>::Database as Database>::Column: Column,
 {
-    if rows.is_empty() {
-        let mut buf = Vec::with_capacity(32);
-        write_map_len(&mut buf, 3);
-        write_str(&mut buf, "affected");
-        write_u64(&mut buf, 0);
-        write_str(&mut buf, "columns");
-        write_array_len(&mut buf, 0);
-        write_str(&mut buf, "rows");
-        write_array_len(&mut buf, 0);
-        return buf;
+    let mut num_rows = 0;
+
+    let first_row = match stream.next().await {
+        Some(Ok(row)) => row,
+        Some(Err(e)) => return Err(e),
+        None => {
+            let mut buf = Vec::with_capacity(32);
+            write_map_len(&mut buf, 3);
+            write_str(&mut buf, "affected");
+            write_u64(&mut buf, 0);
+            write_str(&mut buf, "columns");
+            write_array_len(&mut buf, 0);
+            write_str(&mut buf, "rows");
+            write_array_len(&mut buf, 0);
+            return Ok(buf);
+        }
+    };
+
+    let columns = E::extract_columns(&first_row, col_types);
+    num_rows += 1;
+
+    let mut rows_buf = Vec::new();
+    write_array_len(&mut rows_buf, columns.len() as u32);
+    for (i, col) in columns.iter().enumerate() {
+        E::encode_cell(&mut rows_buf, &first_row, i, col);
     }
 
-    let columns = E::extract_columns(&rows[0], col_types);
+    while let Some(row_res) = stream.next().await {
+        let row = row_res?;
+        num_rows += 1;
+        write_array_len(&mut rows_buf, columns.len() as u32);
+        for (i, col) in columns.iter().enumerate() {
+            E::encode_cell(&mut rows_buf, &row, i, col);
+        }
+    }
 
-    let mut buf = Vec::with_capacity(rows.len() * columns.len() * 16 + 64);
+    let mut buf = Vec::with_capacity(rows_buf.len() + 128);
     write_map_len(&mut buf, 3);
     write_str(&mut buf, "affected");
-    write_u64(&mut buf, rows.len() as u64);
+    write_u64(&mut buf, num_rows as u64);
     write_str(&mut buf, "columns");
-    encode_column_names(&mut buf, &columns);
-    write_str(&mut buf, "rows");
-    encode_row_data::<E>(&mut buf, rows, &columns);
 
-    buf
+    write_array_len(&mut buf, columns.len() as u32);
+    for col in &columns {
+        write_str(&mut buf, &col.name);
+    }
+
+    write_str(&mut buf, "rows");
+    write_array_len(&mut buf, num_rows as u32);
+    buf.extend_from_slice(&rows_buf);
+
+    Ok(buf)
 }
