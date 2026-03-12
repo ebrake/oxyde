@@ -277,6 +277,8 @@ class MutationMixin:
         exec_client = await _resolve_execution_client(using, client)
 
         # Determine batches: all at once or user-specified batch_size
+        if batch_size is not None and batch_size <= 0:
+            raise ValueError("batch_size must be a positive integer")
         if batch_size is None:
             batches = [instances]
         else:

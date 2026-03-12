@@ -240,17 +240,18 @@ class Query(
         if self._annotations:
             aggregates_ir = []
             for alias, agg_obj in self._annotations.items():
-                if hasattr(agg_obj, "to_ir"):
-                    agg_spec = agg_obj.to_ir()
-                    func_name = agg_spec.get("func", "").lower()
-                    agg_ir: dict[str, Any] = {
-                        "op": func_name,
-                        "field": agg_spec.get("field"),
-                        "alias": alias,
-                    }
-                    if agg_spec.get("distinct"):
-                        agg_ir["distinct"] = True
-                    aggregates_ir.append(agg_ir)
+                if not hasattr(agg_obj, "to_ir"):
+                    raise TypeError(f"annotate() received non-expression: {agg_obj!r}")
+                agg_spec = agg_obj.to_ir()
+                func_name = agg_spec.get("func", "").lower()
+                agg_ir: dict[str, Any] = {
+                    "op": func_name,
+                    "field": agg_spec.get("field"),
+                    "alias": alias,
+                }
+                if agg_spec.get("distinct"):
+                    agg_ir["distinct"] = True
+                aggregates_ir.append(agg_ir)
 
         # Convert group_by fields to column names
         group_by_columns = None
