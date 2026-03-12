@@ -72,7 +72,7 @@ def _dump_insert_data(instance: Model) -> dict[str, Any]:
     # Get virtual field names to exclude
     virtual_fields = _get_virtual_fields(instance.__class__)
     data = instance.model_dump(
-        mode="python", exclude_none=False, exclude=virtual_fields
+        mode="python", exclude_unset=True, exclude=virtual_fields
     )
     return data
 

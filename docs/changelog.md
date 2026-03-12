@@ -4,6 +4,29 @@ All notable changes to Oxyde are documented here.
 
 ---
 
+## 0.5.2 - 2026-03-12
+
+### Bug Fixes
+
+- **`save()` on MySQL no longer raises `NotFoundError`** — `save()` for existing records always requested `RETURNING`, which MySQL doesn't support. Now detects the backend and falls back to affected row count for MySQL.
+- **`bulk_create()` no longer loses fields across rows** — `_dump_insert_data()` used `exclude_none=True`, which couldn't distinguish "user didn't set the field" from "user explicitly set None". Changed to `exclude_unset=True` so explicitly passed `None` is preserved while unset fields are omitted (letting DB defaults work).
+- **`bulk_update()` no longer corrupts `bytes` fields** — `model_dump(mode="json")` converted bytes to base64 strings, which Rust wrote as `VARCHAR` instead of binary. Now uses `mode="python"` with `_serialize_value_for_ir()`, matching the same serialization path as `update()`.
+- **`annotate()` rejects invalid expressions** — passing an object without `to_ir()` (e.g. `annotate(x=object())`) was silently ignored. Now raises `TypeError`, matching Django's behavior.
+- **`bulk_create(batch_size=0)` raises `ValueError`** — previously crashed with an unhelpful `range()` error. Negative values silently skipped the INSERT. Now validates `batch_size > 0`.
+- **ContextVar transaction leak** — child async tasks inherited the parent's transaction scope via `ContextVar`. Added `_get_owned_entry()` ownership check using `asyncio.current_task()` so child tasks no longer see the parent's transaction.
+
+### Improvements
+
+- **Streaming query execution** — replaced `fetch_all()` with `fetch()` streams in the Rust driver. Rows are now encoded to MessagePack incrementally as they arrive from the database, reducing peak memory usage for large result sets. (core-v0.4.2)
+- **Unified migration ordering** — `apply_migrations()`, `replay_migrations_up_to()`, and `get_pending_migrations()` now use topological sort via `depends_on`, matching the behavior already used in `replay_migrations()`. Previously these paths used lexicographic sorting only.
+
+### Internal
+
+- Removed dead `get_migration_order()` function from `replay.py`.
+- Moved local imports to module level in migration integration tests.
+
+---
+
 ## 0.5.1 - 2026-03-08
 
 ### Bug Fixes
