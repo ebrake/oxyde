@@ -81,7 +81,14 @@ pub fn rmpv_to_value_typed(value: &rmpv::Value, col_type: Option<&str>) -> Value
 /// Returns `None` if parsing fails — caller falls through to default behavior.
 fn parse_string_by_type(s: &str, typ: &str) -> Option<Value> {
     match typ {
-        "DATETIME" | "TIMESTAMP" | "TIMESTAMPTZ" => parse_datetime(s)
+        "TIMESTAMPTZ" => parse_datetime_utc(s)
+            .map(|dt| Value::ChronoDateTimeUtc(Some(Box::new(dt))))
+            .or_else(|| {
+                parse_datetime(s)
+                    .ok()
+                    .map(|dt| Value::ChronoDateTime(Some(Box::new(dt))))
+            }),
+        "DATETIME" | "TIMESTAMP" => parse_datetime(s)
             .ok()
             .map(|dt| Value::ChronoDateTime(Some(Box::new(dt)))),
         "DATE" => NaiveDate::parse_from_str(s, "%Y-%m-%d")
@@ -118,7 +125,8 @@ fn typed_null(typ: Option<&str>) -> Value {
         Some("BOOL" | "BOOLEAN") => Value::Bool(None),
         Some("UUID") => Value::Uuid(None),
         Some("JSON" | "JSONB") => Value::Json(None),
-        Some("DATETIME" | "TIMESTAMP" | "TIMESTAMPTZ") => Value::ChronoDateTime(None),
+        Some("TIMESTAMPTZ") => Value::ChronoDateTimeUtc(None),
+        Some("DATETIME" | "TIMESTAMP") => Value::ChronoDateTime(None),
         Some("DATE") => Value::ChronoDate(None),
         Some("TIME" | "TIMETZ") => Value::ChronoTime(None),
         Some("BYTEA" | "BLOB" | "BYTES") => Value::Bytes(None),
@@ -502,6 +510,43 @@ mod tests {
         let val = rmpv::Value::String("2024-01-15T10:30:00".into());
         let result = rmpv_to_value_typed(&val, Some("datetime"));
         assert!(matches!(result, Value::ChronoDateTime(Some(_))));
+    }
+
+    #[test]
+    fn test_timestamptz_aware_string() {
+        let val = rmpv::Value::String("2024-01-15T10:30:00+00:00".into());
+        let result = rmpv_to_value_typed(&val, Some("timestamptz"));
+        assert!(
+            matches!(result, Value::ChronoDateTimeUtc(Some(_))),
+            "aware datetime with TIMESTAMPTZ should produce ChronoDateTimeUtc, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_timestamptz_naive_string_fallback() {
+        let val = rmpv::Value::String("2024-01-15T10:30:00".into());
+        let result = rmpv_to_value_typed(&val, Some("TIMESTAMPTZ"));
+        // Naive string without offset: falls back to ChronoDateTime
+        assert!(
+            matches!(result, Value::ChronoDateTime(Some(_))),
+            "naive datetime with TIMESTAMPTZ should fall back to ChronoDateTime, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_timestamptz_null() {
+        assert!(matches!(
+            rmpv_to_value_typed(&rmpv::Value::Nil, Some("TIMESTAMPTZ")),
+            Value::ChronoDateTimeUtc(None)
+        ));
+    }
+
+    #[test]
+    fn test_timestamp_null_stays_naive() {
+        assert!(matches!(
+            rmpv_to_value_typed(&rmpv::Value::Nil, Some("TIMESTAMP")),
+            Value::ChronoDateTime(None)
+        ));
     }
 
     #[test]
