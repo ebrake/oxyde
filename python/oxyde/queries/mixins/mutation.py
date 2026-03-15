@@ -149,6 +149,7 @@ class MutationMixin:
         delete_ir = ir.build_delete_ir(
             table=self.model_class.get_table_name(),
             filter_tree=self._build_filter_tree(),
+            col_types=_build_col_types(self.model_class),
             model=_model_key(self.model_class),
         )
         result_bytes = await exec_client.execute(delete_ir)
