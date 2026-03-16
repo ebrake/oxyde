@@ -7,7 +7,7 @@ use oxyde_driver::{DatabaseBackend, PoolSettings as DriverPoolSettings};
 use oxyde_query::Dialect;
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyBytes, PyDict, PyList, PyString};
+use pyo3::types::{PyBool, PyBytes, PyDict, PyList, PyString, PyTuple};
 use sea_query::Value as QueryValue;
 use serde_json::Value as JsonValue;
 
@@ -108,6 +108,115 @@ pub(crate) fn value_to_py(py: Python<'_>, value: &QueryValue) -> Py<PyAny> {
             .unbind()
             .into_any(),
     }
+}
+
+/// Convert sea_query values to Python list of (type_tag, value) tuples.
+pub(crate) fn values_to_py_tagged<'py>(
+    py: Python<'py>,
+    values: &[QueryValue],
+) -> PyResult<Bound<'py, PyAny>> {
+    let list = PyList::empty(py);
+    for value in values {
+        list.append(value_to_py_tagged(py, value)?)?;
+    }
+    Ok(list.into_any())
+}
+
+/// Convert a single sea_query `Value` to a Python (type_tag, value) tuple.
+#[allow(unreachable_patterns)]
+fn value_to_py_tagged<'py>(py: Python<'py>, value: &QueryValue) -> PyResult<Bound<'py, PyTuple>> {
+    let (tag, val): (&str, Py<PyAny>) = match value {
+        QueryValue::Bool(Some(v)) => ("Bool", PyBool::new(py, *v).to_owned().unbind().into_any()),
+        QueryValue::Bool(None) => ("Bool", py.None()),
+        QueryValue::TinyInt(Some(v)) => (
+            "TinyInt",
+            (*v).into_pyobject(py).unwrap().unbind().into_any(),
+        ),
+        QueryValue::TinyInt(None) => ("TinyInt", py.None()),
+        QueryValue::SmallInt(Some(v)) => (
+            "SmallInt",
+            (*v).into_pyobject(py).unwrap().unbind().into_any(),
+        ),
+        QueryValue::SmallInt(None) => ("SmallInt", py.None()),
+        QueryValue::Int(Some(v)) => ("Int", (*v).into_pyobject(py).unwrap().unbind().into_any()),
+        QueryValue::Int(None) => ("Int", py.None()),
+        QueryValue::BigInt(Some(v)) => (
+            "BigInt",
+            (*v).into_pyobject(py).unwrap().unbind().into_any(),
+        ),
+        QueryValue::BigInt(None) => ("BigInt", py.None()),
+        QueryValue::Float(Some(v)) => {
+            ("Float", (*v).into_pyobject(py).unwrap().unbind().into_any())
+        }
+        QueryValue::Float(None) => ("Float", py.None()),
+        QueryValue::Double(Some(v)) => (
+            "Double",
+            (*v).into_pyobject(py).unwrap().unbind().into_any(),
+        ),
+        QueryValue::Double(None) => ("Double", py.None()),
+        QueryValue::String(Some(s)) => {
+            ("String", PyString::new(py, s.as_str()).unbind().into_any())
+        }
+        QueryValue::String(None) => ("String", py.None()),
+        QueryValue::Bytes(Some(bytes)) => (
+            "Bytes",
+            PyBytes::new(py, bytes.as_slice()).unbind().into_any(),
+        ),
+        QueryValue::Bytes(None) => ("Bytes", py.None()),
+        QueryValue::Json(Some(j)) => (
+            "Json",
+            PyString::new(py, &j.to_string()).unbind().into_any(),
+        ),
+        QueryValue::Json(None) => ("Json", py.None()),
+        QueryValue::Uuid(Some(u)) => (
+            "Uuid",
+            PyString::new(py, &u.to_string()).unbind().into_any(),
+        ),
+        QueryValue::Uuid(None) => ("Uuid", py.None()),
+        QueryValue::Decimal(Some(d)) => (
+            "Decimal",
+            PyString::new(py, &d.to_string()).unbind().into_any(),
+        ),
+        QueryValue::Decimal(None) => ("Decimal", py.None()),
+        QueryValue::ChronoDateTime(Some(dt)) => (
+            "ChronoDateTime",
+            PyString::new(py, &dt.to_string()).unbind().into_any(),
+        ),
+        QueryValue::ChronoDateTime(None) => ("ChronoDateTime", py.None()),
+        QueryValue::ChronoDateTimeUtc(Some(dt)) => (
+            "ChronoDateTimeUtc",
+            PyString::new(py, &dt.to_rfc3339()).unbind().into_any(),
+        ),
+        QueryValue::ChronoDateTimeUtc(None) => ("ChronoDateTimeUtc", py.None()),
+        QueryValue::ChronoDate(Some(d)) => (
+            "ChronoDate",
+            PyString::new(py, &d.to_string()).unbind().into_any(),
+        ),
+        QueryValue::ChronoDate(None) => ("ChronoDate", py.None()),
+        QueryValue::ChronoTime(Some(t)) => (
+            "ChronoTime",
+            PyString::new(py, &t.to_string()).unbind().into_any(),
+        ),
+        QueryValue::ChronoTime(None) => ("ChronoTime", py.None()),
+        other => {
+            let repr = format!("{:?}", other);
+            // Extract variant name from debug repr: "VariantName(...)" -> "VariantName"
+            let tag = repr.split('(').next().unwrap_or("Unknown");
+            (
+                "Unknown",
+                PyString::new(py, &format!("{tag}:{repr}"))
+                    .unbind()
+                    .into_any(),
+            )
+        }
+    };
+    PyTuple::new(
+        py,
+        &[
+            PyString::new(py, tag).into_any(),
+            val.into_bound(py).into_any(),
+        ],
+    )
 }
 
 /// Recursively convert `serde_json::Value` to a Python object.

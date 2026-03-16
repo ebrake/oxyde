@@ -2,7 +2,9 @@
 
 use std::time::Instant;
 
-use crate::convert::{backend_to_dialect, json_to_py, value_to_py, values_to_py};
+use crate::convert::{
+    backend_to_dialect, json_to_py, value_to_py, values_to_py, values_to_py_tagged,
+};
 use crate::types::{encode_insert_result, encode_mutation_result};
 use oxyde_codec::QueryIR;
 use oxyde_driver::{
@@ -296,11 +298,17 @@ pub(crate) fn render_sql<'py>(
 }
 
 /// Render SQL from IR without pool (sync, defaults to Postgres dialect) → (str, list).
+///
+/// When `with_types` is true, params are returned as list of (type_tag, value) tuples
+/// instead of plain values. This allows tests to verify the exact sea_query Value
+/// variant used for parameter binding.
 #[pyfunction]
+#[pyo3(signature = (ir_bytes, dialect_name=None, with_types=false))]
 pub(crate) fn render_sql_debug<'py>(
     py: Python<'py>,
     ir_bytes: &Bound<'py, PyBytes>,
     dialect_name: Option<&str>,
+    with_types: bool,
 ) -> PyResult<Bound<'py, PyTuple>> {
     let ir_data = ir_bytes.as_bytes();
 
@@ -328,7 +336,11 @@ pub(crate) fn render_sql_debug<'py>(
         build_sql(&ir, dialect).map_err(|e| PyErr::new::<PyRuntimeError, _>(e.to_string()))?;
 
     let sql_obj = PyString::new(py, &sql);
-    let params_obj = values_to_py(py, &params)?;
+    let params_obj = if with_types {
+        values_to_py_tagged(py, &params)?
+    } else {
+        values_to_py(py, &params)?
+    };
     PyTuple::new(py, &[sql_obj.into_any(), params_obj])
 }
 

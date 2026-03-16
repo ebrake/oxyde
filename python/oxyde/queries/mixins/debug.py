@@ -30,7 +30,12 @@ class DebugMixin:
         """Must be implemented by the main Query class."""
         raise NotImplementedError
 
-    def sql(self, *, dialect: str = "postgres") -> tuple[str, list[Any]]:
+    def sql(
+        self,
+        *,
+        dialect: str = "postgres",
+        with_types: bool = False,
+    ) -> tuple[str, list[Any]]:
         """
         Return SQL representation and parameters for debugging.
 
@@ -40,21 +45,20 @@ class DebugMixin:
 
         Args:
             dialect: SQL dialect - "postgres" (default), "sqlite", or "mysql"
+            with_types: If True, params are returned as (type_tag, value) tuples
+                showing the exact sea_query Value variant used for binding.
 
         Returns:
-            tuple: (sql_string, parameters) - real SQL that would be executed
+            tuple: (sql_string, parameters)
 
         Examples:
             sql, params = User.objects.filter(age__gte=18).sql()
-            print(f"SQL: {sql}")
-            print(f"Params: {params}")
+            sql, params = User.objects.filter(age__gte=18).sql(with_types=True)
+            # params = [("BigInt", 18)]
         """
-        # Serialize query IR
         query_ir = self.to_ir()
         ir_bytes = msgpack.packb(query_ir, default=_msgpack_encoder)
-
-        # Call Rust render_sql_debug (synchronous, no DB required)
-        return render_sql_debug(ir_bytes, dialect)
+        return render_sql_debug(ir_bytes, dialect, with_types)
 
     def query(self) -> dict[str, Any]:
         """
