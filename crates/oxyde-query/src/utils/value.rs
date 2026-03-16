@@ -50,8 +50,22 @@ pub fn rmpv_to_value_typed(value: &rmpv::Value, col_type: Option<&str>) -> Value
                 if let Some(v) = parse_string_by_type(s, t) {
                     return v;
                 }
+                // Type hint is known and non-temporal - trust it, don't guess datetime
+                match classify_type(t) {
+                    Some(
+                        ArrayType::ChronoDateTime
+                        | ArrayType::ChronoDateTimeUtc
+                        | ArrayType::ChronoDate
+                        | ArrayType::ChronoTime,
+                    )
+                    | None => {} // temporal or unknown type - allow datetime fallback below
+                    Some(_) => {
+                        // STR, INT, UUID, JSON, DECIMAL, etc. - definitely not datetime
+                        return Value::String(Some(Box::new(s.to_string())));
+                    }
+                }
             }
-            // RFC3339 is strict enough to try without type hint
+            // RFC3339 heuristic: only when no type hint or temporal type hint
             if let Some(dt) = parse_datetime_utc(s) {
                 return Value::ChronoDateTimeUtc(Some(Box::new(dt)));
             }
@@ -699,5 +713,78 @@ mod tests {
         let val = rmpv::Value::Array(vec![rmpv::Value::Integer(1.into())]);
         let result = rmpv_to_value_typed(&val, Some("json"));
         assert!(matches!(result, Value::Json(Some(_))));
+    }
+
+    #[test]
+    fn test_str_hint_iso_datetime_stays_string() {
+        let val = rmpv::Value::String("2024-01-15T12:30:00Z".into());
+        let result = rmpv_to_value_typed(&val, Some("str"));
+        match result {
+            Value::String(Some(s)) => assert_eq!(s.as_ref(), "2024-01-15T12:30:00Z"),
+            other => panic!("expected Value::String, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_str_hint_rfc3339_with_offset_stays_string() {
+        let val = rmpv::Value::String("2024-01-15T12:30:00+03:00".into());
+        let result = rmpv_to_value_typed(&val, Some("str"));
+        assert!(
+            matches!(result, Value::String(Some(_))),
+            "str hint should prevent datetime parsing, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_text_hint_iso_datetime_stays_string() {
+        let val = rmpv::Value::String("2024-01-15T12:30:00Z".into());
+        let result = rmpv_to_value_typed(&val, Some("TEXT"));
+        assert!(
+            matches!(result, Value::String(Some(_))),
+            "TEXT hint should prevent datetime parsing, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_varchar_hint_iso_datetime_stays_string() {
+        let val = rmpv::Value::String("2024-01-15T12:30:00Z".into());
+        let result = rmpv_to_value_typed(&val, Some("VARCHAR"));
+        assert!(
+            matches!(result, Value::String(Some(_))),
+            "VARCHAR hint should prevent datetime parsing, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_uuid_hint_iso_datetime_stays_string() {
+        // UUID parsing fails for this string, but it shouldn't become datetime either
+        let val = rmpv::Value::String("2024-01-15T12:30:00Z".into());
+        let result = rmpv_to_value_typed(&val, Some("uuid"));
+        assert!(
+            matches!(result, Value::String(Some(_))),
+            "uuid hint should prevent datetime parsing, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_no_hint_iso_datetime_still_parsed() {
+        // Legacy behavior: without type hint, RFC3339 heuristic still works
+        let val = rmpv::Value::String("2024-01-15T12:30:00Z".into());
+        let result = rmpv_to_value_typed(&val, None);
+        assert!(
+            matches!(result, Value::ChronoDateTimeUtc(Some(_))),
+            "no hint should still parse RFC3339, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_datetime_hint_with_tz_string_still_parsed() {
+        // datetime (naive) hint with tz-aware string: fallback should still work
+        let val = rmpv::Value::String("2024-01-15T12:30:00+03:00".into());
+        let result = rmpv_to_value_typed(&val, Some("datetime"));
+        assert!(
+            matches!(result, Value::ChronoDateTimeUtc(Some(_))),
+            "datetime hint with tz string should fall back to UTC parsing, got {result:?}"
+        );
     }
 }
