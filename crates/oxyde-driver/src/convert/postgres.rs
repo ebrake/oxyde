@@ -99,10 +99,10 @@ impl CellEncoder for PgEncoder {
                 true
             }
             "decimal" => {
-                match row.try_get::<Option<String>, _>(idx) {
-                    Ok(Some(v)) => write_str(buf, &v),
+                match row.try_get::<Option<Decimal>, _>(idx) {
+                    Ok(Some(v)) => write_str(buf, &v.to_string()),
                     Ok(None) => write_nil(buf),
-                    Err(_) => write_nil(buf),
+                    Err(_) => fallback_str(buf, row, idx),
                 }
                 true
             }
@@ -154,8 +154,8 @@ impl CellEncoder for PgEncoder {
                 }
             }
             name if name.contains("NUMERIC") || name.contains("DECIMAL") => {
-                match row.try_get::<Option<String>, _>(idx) {
-                    Ok(Some(v)) => write_str(buf, &v),
+                match row.try_get::<Option<Decimal>, _>(idx) {
+                    Ok(Some(v)) => write_str(buf, &v.to_string()),
                     Ok(None) => write_nil(buf),
                     Err(_) => fallback_str(buf, row, idx),
                 }
