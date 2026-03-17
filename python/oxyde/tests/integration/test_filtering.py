@@ -7,7 +7,7 @@ import pytest
 
 from oxyde import Q
 
-from .conftest import Author, Event, Post
+from .conftest import AliasedEvent, Author, Event, Post
 
 
 class TestBasicFilters:
@@ -197,3 +197,35 @@ class TestDatetimeFilters:
             created_at__lte=datetime(2026, 3, 14, 9, 34, 18),
         ).all(client=event_db)
         assert len(events) == 3  # Morning A, B, C
+
+
+class TestDbColumnAliasing:
+    """fields with db_column != field_name must work correctly."""
+
+    @pytest.mark.asyncio
+    async def test_select_with_aliased_columns(self, aliased_db):
+        """SELECT should return field_names, not db_columns."""
+        events = await AliasedEvent.objects.all(client=aliased_db)
+        assert len(events) == 2
+        assert events[0].title == "Morning A"
+        assert isinstance(events[0].created, datetime)
+
+    @pytest.mark.asyncio
+    async def test_filter_with_aliased_datetime(self, aliased_db):
+        """datetime filter on aliased field should use correct type hint."""
+        events = await AliasedEvent.objects.filter(
+            created__gte=datetime(2026, 3, 15),
+        ).all(client=aliased_db)
+        assert len(events) == 1
+        assert events[0].title == "Midnight"
+
+    @pytest.mark.asyncio
+    async def test_create_with_aliased_columns(self, aliased_db):
+        """RETURNING from create should remap db_columns to field_names."""
+        event = await AliasedEvent.objects.create(
+            title="New Event",
+            created=datetime(2026, 4, 1, 12, 0, 0),
+            client=aliased_db,
+        )
+        assert event.title == "New Event"
+        assert event.created == datetime(2026, 4, 1, 12, 0, 0)

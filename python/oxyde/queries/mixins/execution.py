@@ -30,6 +30,14 @@ if TYPE_CHECKING:
     from oxyde.models.base import Model
 
 
+def _remap_columns(columns: list[str], model_class: type[Model]) -> list[str]:
+    """Remap db_column names to field names using cached reverse_column_map."""
+    rmap = model_class._db_meta.reverse_column_map
+    if not rmap:
+        return columns
+    return [rmap.get(c, c) for c in columns]
+
+
 class ExecutionMixin:
     """Mixin providing query execution capabilities."""
 
@@ -76,7 +84,8 @@ class ExecutionMixin:
             first, second = data
             if isinstance(first, list) and all(isinstance(c, str) for c in first):
                 # Columnar format: first is column names, second is rows
-                columns = first
+                # Remap db_columns → field_names
+                columns = _remap_columns(first, self.model_class)
                 row_values = second
                 # Convert to dicts via zip (fast C implementation)
                 rows = [dict(zip(columns, row)) for row in row_values]
@@ -125,7 +134,8 @@ class ExecutionMixin:
         if isinstance(data, (list, tuple)) and len(data) == 2:
             first, second = data
             if isinstance(first, list) and all(isinstance(c, str) for c in first):
-                return [dict(zip(first, row)) for row in second]
+                columns = _remap_columns(first, self.model_class)
+                return [dict(zip(columns, row)) for row in second]
         return data if isinstance(data, list) else []
 
     async def fetch_models(self, client: SupportsExecute) -> list[Model]:
@@ -161,7 +171,8 @@ class ExecutionMixin:
         ):
             # Dedup format: [main_columns, main_rows, relations_map]
             main_columns, main_rows, relations_map = data
-            rows = [dict(zip(main_columns, row)) for row in main_rows]
+            columns = _remap_columns(main_columns, model_class)
+            rows = [dict(zip(columns, row)) for row in main_rows]
             del main_rows, data
 
             models = adapter.validate_python(rows)
@@ -174,7 +185,8 @@ class ExecutionMixin:
             and (not data[0] or isinstance(data[0][0], str))
         ):
             # Columnar format: [columns, rows] (columns may be empty for 0 rows)
-            columns, row_values = data
+            raw_columns, row_values = data
+            columns = _remap_columns(raw_columns, model_class)
             rows = [dict(zip(columns, row)) for row in row_values]
             del row_values, data
 

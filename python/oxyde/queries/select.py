@@ -226,7 +226,8 @@ class Query(
                 raise ValueError("SELECT query must include at least one column")
             fields = self._selected_fields
 
-        column_mappings = self._column_mappings_for_fields(fields)
+        # Convert field names to db_columns for Rust (Rust operates on columns only)
+        db_columns = [self._column_for_field(f) for f in fields]
         order_by = [
             (self._column_for_field(field), direction)
             for field, direction in self._order_by_fields
@@ -275,10 +276,10 @@ class Query(
 
         return ir.build_select_ir(
             table=table_name,
-            columns=fields,
+            columns=db_columns,
             col_types=col_types,
             model=_model_key(self.model_class),
-            column_mappings=column_mappings or None,
+            column_mappings=None,
             filter_tree=final_filter_tree,
             distinct=self._distinct or None,
             limit=self._limit_value,

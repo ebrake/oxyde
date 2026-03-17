@@ -120,7 +120,9 @@ class MutationMixin:
         result_bytes = await exec_client.execute(update_ir)
         result = msgpack.unpackb(result_bytes, raw=False)
         if returning:
-            columns = result.get("columns", [])
+            rmap = self.model_class._db_meta.reverse_column_map
+            raw_columns = result.get("columns", [])
+            columns = [rmap.get(c, c) for c in raw_columns] if rmap else raw_columns
             rows = result.get("rows", [])
             return [dict(zip(columns, row)) for row in rows]
         return result.get("affected", 0)
@@ -227,15 +229,10 @@ class MutationMixin:
 
         # Update instance from RETURNING * result (with Pydantic validation)
         if "rows" in result and result["rows"]:
-            col_to_field = {
-                meta.db_column: field_name
-                for field_name, meta in self.model_class._db_meta.field_metadata.items()
-            }
+            rmap = self.model_class._db_meta.reverse_column_map
             columns = result.get("columns", [])
             row = result["rows"][0]
-            row_dict = {
-                col_to_field.get(col, col): value for col, value in zip(columns, row)
-            }
+            row_dict = {rmap.get(col, col): value for col, value in zip(columns, row)}
             instance = self.model_class.model_validate(row_dict)
         elif "inserted_ids" in result and result["inserted_ids"]:
             pk_field = self._primary_key_field()

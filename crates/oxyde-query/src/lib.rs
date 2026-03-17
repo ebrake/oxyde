@@ -258,19 +258,15 @@ mod tests {
     }
 
     #[test]
-    fn test_column_mappings_emit_aliases() {
+    fn test_cols_are_db_columns() {
+        // Python now sends db_columns directly in cols (no column_mappings needed)
         let ir = QueryIR {
             table: "posts".into(),
-            cols: Some(vec!["title".into()]),
-            column_mappings: Some(HashMap::from([("title".into(), "title_text".into())])),
+            cols: Some(vec!["title_text".into()]),
             ..Default::default()
         };
         let (sql, _) = build_sql(&ir, Dialect::Postgres).unwrap();
-        assert!(
-            sql.contains("\"title_text\" AS \"title\""),
-            "unexpected SQL: {}",
-            sql
-        );
+        assert!(sql.contains("\"title_text\""), "unexpected SQL: {}", sql);
     }
 
     #[test]

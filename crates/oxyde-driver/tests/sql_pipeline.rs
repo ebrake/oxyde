@@ -27,9 +27,11 @@ fn decode_columnar(buf: &[u8]) -> (Vec<String>, Vec<Vec<rmpv::Value>>) {
 #[tokio::test]
 async fn sqlite_end_to_end_pipeline() {
     let pool_name = format!("pipeline_{}", Uuid::new_v4().simple());
-    let mut settings = PoolSettings::default();
-    settings.max_connections = Some(1);
-    settings.min_connections = Some(1);
+    let settings = PoolSettings {
+        max_connections: Some(1),
+        min_connections: Some(1),
+        ..Default::default()
+    };
     init_pool(&pool_name, "sqlite::memory:", settings)
         .await
         .expect("init pool");

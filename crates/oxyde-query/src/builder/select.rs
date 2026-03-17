@@ -44,15 +44,9 @@ fn build_select_statement(ir: &QueryIR) -> Result<SelectStatement> {
         }
     } else if let Some(cols) = &ir.cols {
         for col in cols {
-            let mapped = ir
-                .column_mappings
-                .as_ref()
-                .and_then(|mappings| mappings.get(col))
-                .cloned()
-                .unwrap_or_else(|| col.clone());
             let column_ref = ColumnRef::TableColumn(
                 SeaRc::new(table.clone()),
-                SeaRc::new(ColumnIdent(mapped.clone())),
+                SeaRc::new(ColumnIdent(col.clone())),
             );
             query.expr_as(Expr::col(column_ref), Alias::new(col.clone()));
         }

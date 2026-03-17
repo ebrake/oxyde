@@ -25,6 +25,18 @@ class Event(Model):
         table_name = "events"
 
 
+class AliasedEvent(Model):
+    """Model with db_column != field_name (for P3 bug regression test)."""
+
+    id: int | None = Field(default=None, db_pk=True)
+    title: str = Field(max_length=200, db_column="event_title")
+    created: datetime = Field(db_column="created_at")
+
+    class Meta:
+        is_table = True
+        table_name = "aliased_events"
+
+
 class Author(Model):
     id: int | None = Field(default=None, db_pk=True)
     name: str = Field(max_length=100)
@@ -91,7 +103,7 @@ class PostTag(Model):
         table_name = "post_tags"
 
 
-ALL_MODELS = [Event, Author, Category, Post, Comment, Tag, PostTag]
+ALL_MODELS = [Event, AliasedEvent, Author, Category, Post, Comment, Tag, PostTag]
 
 
 # ── Schema & Seed SQL ───────────────────────────────────────────────────
@@ -111,6 +123,20 @@ INSERT INTO events (title, created_at) VALUES
     ('Morning C', '2026-03-14 09:34:18'),
     ('Midnight',  '2026-03-15 00:00:00'),
     ('Next Day',  '2026-03-16 00:00:00');
+"""
+
+ALIASED_EVENT_SCHEMA = """\
+CREATE TABLE aliased_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_title TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+"""
+
+ALIASED_EVENT_SEED = """\
+INSERT INTO aliased_events (event_title, created_at) VALUES
+    ('Morning A', '2026-03-14 09:34:18'),
+    ('Midnight',  '2026-03-15 00:00:00');
 """
 
 SCHEMA_SQL = """\
@@ -235,6 +261,26 @@ async def event_db(tmp_path):
     database = AsyncDatabase(
         f"sqlite://{db_path}",
         name=f"evt_{uuid.uuid4().hex}",
+        overwrite=True,
+    )
+    await database.connect()
+    try:
+        yield database
+    finally:
+        await disconnect_all()
+
+
+@pytest_asyncio.fixture
+async def aliased_db(tmp_path):
+    """Fresh SQLite DB with aliased_events for db_column remapping tests."""
+    db_path = tmp_path / "aliased.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(ALIASED_EVENT_SCHEMA)
+    conn.executescript(ALIASED_EVENT_SEED)
+    conn.close()
+    database = AsyncDatabase(
+        f"sqlite://{db_path}",
+        name=f"alias_{uuid.uuid4().hex}",
         overwrite=True,
     )
     await database.connect()

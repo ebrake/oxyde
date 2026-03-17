@@ -298,9 +298,14 @@ class Model(BaseModel, metaclass=OxydeModelMeta):
             return  # Already computed
 
         col_types: dict[str, str] = {}
-        for meta in cls._db_meta.field_metadata.values():
+        reverse_map: dict[str, str] = {}
+        for field_name, meta in cls._db_meta.field_metadata.items():
             # Skip virtual relation fields
             if meta.extra.get("reverse_fk") or meta.extra.get("m2m"):
+                continue
+            # Skip FK model fields (author: Author) — only synthetic FK
+            # fields (author_id) are actual columns
+            if meta.foreign_key:
                 continue
             # Use explicit db_type if specified, otherwise infer from python_type
             if meta.db_type:
@@ -309,8 +314,12 @@ class Model(BaseModel, metaclass=OxydeModelMeta):
                 ir_type = get_ir_type(meta.python_type)
                 if ir_type:
                     col_types[meta.db_column] = ir_type
+            # Cache reverse mapping where db_column differs from field_name
+            if meta.db_column != field_name:
+                reverse_map[meta.db_column] = field_name
 
         cls._db_meta.col_types = col_types if col_types else None
+        cls._db_meta.reverse_column_map = reverse_map
 
     @classmethod
     def _resolve_fk_fields(cls) -> None:
