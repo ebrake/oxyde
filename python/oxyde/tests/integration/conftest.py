@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
+from datetime import datetime
 
 import pytest
 import pytest_asyncio
@@ -12,6 +13,16 @@ from oxyde.models.registry import register_table
 
 
 # ── Models ──────────────────────────────────────────────────────────────
+
+
+class Event(Model):
+    id: int | None = Field(default=None, db_pk=True)
+    title: str = Field(max_length=200)
+    created_at: datetime
+
+    class Meta:
+        is_table = True
+        table_name = "events"
 
 
 class Author(Model):
@@ -80,10 +91,27 @@ class PostTag(Model):
         table_name = "post_tags"
 
 
-ALL_MODELS = [Author, Category, Post, Comment, Tag, PostTag]
+ALL_MODELS = [Event, Author, Category, Post, Comment, Tag, PostTag]
 
 
 # ── Schema & Seed SQL ───────────────────────────────────────────────────
+
+EVENT_SCHEMA = """\
+CREATE TABLE events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+"""
+
+EVENT_SEED = """\
+INSERT INTO events (title, created_at) VALUES
+    ('Morning A', '2026-03-14 09:34:18'),
+    ('Morning B', '2026-03-14 09:34:18'),
+    ('Morning C', '2026-03-14 09:34:18'),
+    ('Midnight',  '2026-03-15 00:00:00'),
+    ('Next Day',  '2026-03-16 00:00:00');
+"""
 
 SCHEMA_SQL = """\
 PRAGMA foreign_keys = ON;
@@ -187,6 +215,26 @@ async def db(tmp_path):
     database = AsyncDatabase(
         f"sqlite://{db_path}",
         name=f"test_{uuid.uuid4().hex}",
+        overwrite=True,
+    )
+    await database.connect()
+    try:
+        yield database
+    finally:
+        await disconnect_all()
+
+
+@pytest_asyncio.fixture
+async def event_db(tmp_path):
+    """Fresh SQLite DB with events for datetime filtering tests."""
+    db_path = tmp_path / "events.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(EVENT_SCHEMA)
+    conn.executescript(EVENT_SEED)
+    conn.close()
+    database = AsyncDatabase(
+        f"sqlite://{db_path}",
+        name=f"evt_{uuid.uuid4().hex}",
         overwrite=True,
     )
     await database.connect()

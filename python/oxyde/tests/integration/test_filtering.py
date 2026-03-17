@@ -1,11 +1,13 @@
 """Integration tests for filtering and Q expressions."""
 from __future__ import annotations
 
+from datetime import datetime
+
 import pytest
 
 from oxyde import Q
 
-from .conftest import Author, Post
+from .conftest import Author, Event, Post
 
 
 class TestBasicFilters:
@@ -144,3 +146,54 @@ class TestChaining:
         ).all(client=db)
         assert len(posts_chained) == len(posts_single)
         assert {p.id for p in posts_chained} == {p.id for p in posts_single}
+
+
+class TestDatetimeFilters:
+    @pytest.mark.asyncio
+    async def test_datetime_gte_includes_same_day_with_time(self, event_db):
+        """gte midnight should include same-day records with time > 00:00."""
+        events = await Event.objects.filter(
+            created_at__gte=datetime(2026, 3, 14),
+        ).all(client=event_db)
+        assert len(events) == 5
+
+    @pytest.mark.asyncio
+    async def test_datetime_range_includes_same_day(self, event_db):
+        """Range filter should include all records within the range."""
+        events = await Event.objects.filter(
+            created_at__gte=datetime(2026, 3, 14),
+            created_at__lt=datetime(2026, 3, 17),
+        ).all(client=event_db)
+        assert len(events) == 5
+
+    @pytest.mark.asyncio
+    async def test_datetime_gte_with_time_excludes_earlier(self, event_db):
+        """gte with time 10:00 should exclude records at 09:34."""
+        events = await Event.objects.filter(
+            created_at__gte=datetime(2026, 3, 14, 10, 0, 0),
+        ).all(client=event_db)
+        assert len(events) == 2  # Midnight + Next Day
+
+    @pytest.mark.asyncio
+    async def test_datetime_lt_excludes_later(self, event_db):
+        """lt midnight of a day should exclude that day's records."""
+        events = await Event.objects.filter(
+            created_at__lt=datetime(2026, 3, 15),
+        ).all(client=event_db)
+        assert len(events) == 3  # Morning A, B, C
+
+    @pytest.mark.asyncio
+    async def test_datetime_gt_excludes_equal(self, event_db):
+        """gt specific time should exclude records at that exact time."""
+        events = await Event.objects.filter(
+            created_at__gt=datetime(2026, 3, 14, 9, 34, 18),
+        ).all(client=event_db)
+        assert len(events) == 2  # Midnight + Next Day
+
+    @pytest.mark.asyncio
+    async def test_datetime_lte_includes_equal(self, event_db):
+        """lte specific time should include records at that exact time."""
+        events = await Event.objects.filter(
+            created_at__lte=datetime(2026, 3, 14, 9, 34, 18),
+        ).all(client=event_db)
+        assert len(events) == 3  # Morning A, B, C
