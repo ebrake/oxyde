@@ -107,7 +107,7 @@ def _get_field_info(model_class: type[Model]) -> dict[str, tuple[Any, bool]]:
         is_pk = False
         if isinstance(field_info, OxydeFieldInfo):
             is_pk = field_info.db_pk or False
-        elif hasattr(field_info, "json_schema_extra") and field_info.json_schema_extra:
+        elif isinstance(getattr(field_info, "json_schema_extra", None), dict):
             is_pk = field_info.json_schema_extra.get("db_pk", False)
 
         result[field_name] = (python_type, is_pk)

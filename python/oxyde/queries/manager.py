@@ -22,6 +22,7 @@ Example:
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
 from oxyde.exceptions import IntegrityError, ManagerError, NotFoundError
@@ -284,13 +285,13 @@ class QueryManager:
 
     async def bulk_create(
         self,
-        objects,
+        objects: Iterable[Any],
         *,
         using: str | None = None,
         client: SupportsExecute | None = None,
         batch_size: int | None = None,
     ) -> list[Model]:
-        """Insert multiple objects efficiently."""
+        """Bulk insert multiple objects efficiently."""
         return await self._query().bulk_create(
             objects,
             using=using,
@@ -300,8 +301,8 @@ class QueryManager:
 
     async def bulk_update(
         self,
-        objects,
-        fields,
+        objects: Iterable[Model],
+        fields: Iterable[str],
         *,
         using: str | None = None,
         client: SupportsExecute | None = None,

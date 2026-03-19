@@ -45,6 +45,7 @@ from __future__ import annotations
 from typing import Any
 
 from oxyde.core import ir
+from oxyde.core.ir import FilterNode
 from oxyde.core.types import serialize_value
 
 
@@ -59,7 +60,7 @@ class Condition:
         self.value = value
         self.column = column or field
 
-    def to_ir(self) -> dict[str, Any]:
+    def to_ir(self) -> FilterNode:
         """Convert to IR format expected by the Rust codec.
 
         Values are serialized via TYPE_REGISTRY so that date, UUID, Decimal

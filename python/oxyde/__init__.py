@@ -91,7 +91,7 @@ from oxyde.queries import (
 __version__ = "0.6.0"
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> type:
     if name == "OxydeModel":
         warnings.warn(
             "OxydeModel is deprecated, use Model instead",

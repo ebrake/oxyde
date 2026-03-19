@@ -7,7 +7,7 @@ from oxyde.migrations.config import import_models
 
 
 @app.command(name="generate-stubs")
-def generate_stubs():
+def generate_stubs() -> None:
     """
     Generate .pyi stub files for all registered table models.
 

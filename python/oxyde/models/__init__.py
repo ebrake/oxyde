@@ -58,7 +58,7 @@ from .registry import (
 )
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> type:
     if name == "OxydeModel":
         warnings.warn(
             "OxydeModel is deprecated, use Model instead",

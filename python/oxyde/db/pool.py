@@ -88,7 +88,7 @@ except ImportError:
         raise RuntimeError("Rust core module not available. Please install oxyde-core.")
 
 
-def _msgpack_encoder(obj):
+def _msgpack_encoder(obj: Any) -> Any:
     """Encode non-native types for msgpack via TYPE_REGISTRY."""
     return serialize_value(obj)
 

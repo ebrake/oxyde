@@ -129,7 +129,7 @@ def _get_pk_field_name(model_cls: type) -> str:
 class OxydeModelMeta(ModelMetaclass):
     """Custom metaclass that exposes model fields as DSL descriptors."""
 
-    def __new__(mcs, name: str, bases: tuple, namespace: dict, **kwargs: Any):
+    def __new__(mcs, name: str, bases: tuple, namespace: dict, **kwargs: Any) -> type:
         """Create new Model class with auto-configured relation fields."""
         # Auto-add default_factory=list for virtual relation fields BEFORE Pydantic
         # This ensures fields with db_reverse_fk or db_m2m are not required
@@ -164,8 +164,8 @@ class OxydeModelMeta(ModelMetaclass):
 
         return cls
 
-    def __getattr__(cls, item: str) -> Any:  # type: ignore[override]
-        return super().__getattr__(item)  # type: ignore[misc]
+    def __getattr__(cls, item: str) -> Any:
+        return super().__getattr__(item)
 
 
 def _build_globalns(cls: type) -> dict[str, Any]:
@@ -701,7 +701,8 @@ class Model(BaseModel, metaclass=OxydeModelMeta):
                     raise FieldError(msg)
             else:
                 fields = set(self.__class__.model_fields.keys())
-            fields.discard(pk_field)
+            if pk_field:
+                fields.discard(pk_field)
             values = _dump_update_data(self, fields)
             if not values:
                 # Call post_save even if no values to update (for consistency)

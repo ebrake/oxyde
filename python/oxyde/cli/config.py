@@ -7,7 +7,7 @@ from oxyde.migrations.config import load_config, save_config
 
 
 @app.command()
-def init():
+def init() -> None:
     """
     Initialize Oxyde configuration.
 

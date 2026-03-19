@@ -73,6 +73,11 @@ class Q:
         Q(age__gte=18) & (Q(status="active") | Q(status="premium"))
     """
 
+    _node: FilterNode | None
+    _kwargs: dict[str, Any]
+    _op: str | None
+    _children: list[Q]
+
     def __init__(self, *args: Any, **kwargs: Any):
         """
         Create a Q expression from conditions.
@@ -80,6 +85,9 @@ class Q:
         Args:
             **kwargs: Field lookups (e.g., age__gte=18, name__contains="John")
         """
+        self._op = None
+        self._children = []
+
         if args and not kwargs:
             # Q(condition_node) - wrap existing FilterNode
             if len(args) == 1 and isinstance(args[0], dict):
@@ -188,8 +196,6 @@ class Q:
         if not isinstance(other, Q):
             raise TypeError(f"Cannot AND Q with {type(other)}")
         result = Q()
-        result._node = None  # Will be computed lazily
-        result._kwargs = {}
         result._op = "and"
         result._children = [self, other]
         return result
@@ -199,8 +205,6 @@ class Q:
         if not isinstance(other, Q):
             raise TypeError(f"Cannot OR Q with {type(other)}")
         result = Q()
-        result._node = None
-        result._kwargs = {}
         result._op = "or"
         result._children = [self, other]
         return result
@@ -208,8 +212,6 @@ class Q:
     def __invert__(self) -> Q:
         """Negate with NOT logic: ~Q(...)"""
         result = Q()
-        result._node = None
-        result._kwargs = {}
         result._op = "not"
         result._children = [self]
         return result

@@ -70,21 +70,21 @@ def _finalize_model(model: type[Model]) -> bool:
     if pending_fk:
         fk_resolved = getattr(model, "__fk_fields_resolved__", False)
         if not fk_resolved:
-            model.__fk_fields_resolved__ = False  # type: ignore[attr-defined]
-            model._resolve_fk_fields()  # type: ignore[attr-defined]
+            model.__fk_fields_resolved__ = False
+            model._resolve_fk_fields()
             if not getattr(model, "__fk_fields_resolved__", False):
                 return False
 
     # Step 2: Parse field tags → field_metadata
     if not model._db_meta.field_metadata:
         try:
-            model._parse_field_tags()  # type: ignore[attr-defined]
+            model._parse_field_tags()
         except NameError:
             return False
 
     # Step 3: Compute col_types for IR
     if model._db_meta.col_types is None:
-        model._compute_col_types()  # type: ignore[attr-defined]
+        model._compute_col_types()
 
     # Step 4: Cache PK field
     if model._db_meta.pk_field is None:

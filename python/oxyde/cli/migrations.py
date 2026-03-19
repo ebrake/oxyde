@@ -22,7 +22,7 @@ def makemigrations(
     dry_run: bool = typer.Option(
         False, help="Show what would be created without actually creating"
     ),
-):
+) -> None:
     """
     Create migration files by comparing current models with replayed migrations.
 
@@ -167,7 +167,7 @@ def migrate(
         False, help="Mark migrations as applied without running SQL"
     ),
     db_alias: str = typer.Option("default", help="Database connection alias"),
-):
+) -> None:
     """
     Apply all pending migrations.
 
@@ -324,7 +324,7 @@ def migrate(
 @app.command()
 def showmigrations(
     db_alias: str = typer.Option("default", help="Database connection alias"),
-):
+) -> None:
     """
     Show list of all migrations with their status (applied/pending).
     """
@@ -376,7 +376,7 @@ def showmigrations(
 @app.command()
 def sqlmigrate(
     name: str,
-):
+) -> None:
     """
     Print the SQL for a specific migration.
 

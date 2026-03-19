@@ -57,6 +57,7 @@ from oxyde.db.pool import AsyncDatabase
 from oxyde.db.registry import get_connection
 from oxyde.db.transaction import AsyncTransaction, get_active_transaction
 from oxyde.exceptions import FieldLookupError, ManagerError
+from oxyde.models.metadata import ColumnMeta
 from oxyde.models.registry import registered_tables
 from oxyde.models.serializers import _get_virtual_fields
 
@@ -82,7 +83,7 @@ class SupportsExecute(Protocol):
 
 
 # TypeVar for query builders (covariant for subclassing)
-TQuery = TypeVar("TQuery", bound="Query")  # type: ignore
+TQuery = TypeVar("TQuery", bound="Query")
 
 
 def _resolve_registered_model(model_key: str) -> type[Model]:
@@ -99,7 +100,7 @@ def _resolve_registered_model(model_key: str) -> type[Model]:
     raise FieldLookupError(f"Related model '{model_key}' is not registered")
 
 
-def _primary_key_meta(model_class: type[Model]):
+def _primary_key_meta(model_class: type[Model]) -> ColumnMeta:
     """Get primary key metadata from model (uses cached pk_field)."""
     pk = model_class._db_meta.pk_field
     if pk is not None:
@@ -186,9 +187,9 @@ def _resolve_pool_name(
         else:
             # Unknown client type, try to get name attribute
             if hasattr(client, "name"):
-                return client.name
+                return str(client.name)
             elif hasattr(client, "_database") and hasattr(client._database, "name"):
-                return client._database.name
+                return str(client._database.name)
             else:
                 ctype = type(client).__name__
                 raise ManagerError(f"Cannot determine pool name from client: {ctype}")

@@ -382,7 +382,7 @@ def _ensure_date_inputs(value: Any, expected: int, label: str) -> tuple[int, ...
         return (value,)
     if isinstance(value, (tuple, list)) and len(value) == expected:
         if all(isinstance(v, int) for v in value):
-            return tuple(value)  # type: ignore[return-value]
+            return tuple(value)
     raise FieldLookupValueError(f"Lookup '{label}' expects {expected} integer value(s)")
 
 
@@ -391,6 +391,8 @@ def _build_year_conditions(
 ) -> list[Condition]:
     """Build conditions for year lookup."""
     (year,) = _ensure_date_inputs(value, 1, "year")
+    start: datetime | date
+    end: datetime | date
     if isinstance(meta.python_type, type) and issubclass(meta.python_type, datetime):
         start = datetime(year, 1, 1)
         end = datetime(year + 1, 1, 1)
@@ -414,6 +416,8 @@ def _build_month_conditions(
     year, month = _ensure_date_inputs(value, 2, "month")
     if not 1 <= month <= 12:
         raise FieldLookupValueError("Lookup 'month' requires month in range 1..12")
+    start: datetime | date
+    end: datetime | date
     if isinstance(meta.python_type, type) and issubclass(meta.python_type, datetime):
         start = datetime(year, month, 1)
         end_month = month + 1
@@ -445,6 +449,8 @@ def _build_day_conditions(
 ) -> list[Condition]:
     """Build conditions for day lookup."""
     year, month, day = _ensure_date_inputs(value, 3, "day")
+    start: datetime | date
+    end: datetime | date
     try:
         if isinstance(meta.python_type, type) and issubclass(
             meta.python_type, datetime
