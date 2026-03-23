@@ -119,6 +119,9 @@ class Query(
         self._union_all: bool = False
         # Locking state (FOR UPDATE / FOR SHARE)
         self._lock_type: str | None = None
+        # Shortcut query flags (count / exists)
+        self._count: bool = False
+        self._exists: bool = False
 
     def _clone(self: TQuery) -> TQuery:
         """Create a copy of this query."""
@@ -147,6 +150,9 @@ class Query(
         clone._union_all = self._union_all
         # Locking
         clone._lock_type = self._lock_type
+        # Shortcut flags
+        clone._count = self._count
+        clone._exists = self._exists
         return clone
 
     def select(self: TQuery, *fields: str) -> TQuery:
@@ -293,6 +299,8 @@ class Query(
             pk_column=pk_column,
             union_query=union_ir,
             union_all=self._union_all or None,
+            count=self._count or None,
+            exists=self._exists or None,
         )
 
 

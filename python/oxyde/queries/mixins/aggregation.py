@@ -206,13 +206,14 @@ class AggregationMixin:
         """
         exec_client = await _resolve_execution_client(using, client)
 
-        # Build minimal count IR directly
-        query_ir = ir.build_select_ir(
-            table=self.model_class.get_table_name(),
-            filter_tree=self._build_filter_tree(),
-            joins=self._join_specs_to_ir() or None,
-            count=True,
-        )
+        # Clone query with count flag — goes through to_ir() so col_types
+        # and all other IR fields are included automatically.
+        clone = self._clone()
+        clone._count = True
+        clone._limit_value = None
+        clone._offset_value = None
+        clone._order_by_fields = []
+        query_ir = clone.to_ir()
 
         result_bytes = await exec_client.execute(query_ir)
         result = msgpack.unpackb(result_bytes, raw=False)

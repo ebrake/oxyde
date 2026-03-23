@@ -196,3 +196,36 @@ def test_without_types_returns_plain_values():
     assert params == [25, "Alice"]
     assert isinstance(params[0], int)
     assert isinstance(params[1], str)
+
+
+# ---- count() / exists() use to_ir() and inherit col_types ----
+
+
+@pytest.mark.parametrize("dialect", DIALECTS)
+@pytest.mark.parametrize(
+    "name,filters,expected",
+    FILTER_CASES,
+    ids=[c[0] for c in FILTER_CASES],
+)
+def test_count_filter_binding(dialect, name, filters, expected):
+    """count() queries must bind filter values with correct types."""
+    query = TypeModel.objects.filter(**filters)
+    clone = query._clone()
+    clone._count = True
+    _, params = clone.sql(dialect=dialect, with_types=True)
+    assert params == expected, f"[{dialect}] count {name}: {params} != {expected}"
+
+
+@pytest.mark.parametrize("dialect", DIALECTS)
+@pytest.mark.parametrize(
+    "name,filters,expected",
+    FILTER_CASES,
+    ids=[c[0] for c in FILTER_CASES],
+)
+def test_exists_filter_binding(dialect, name, filters, expected):
+    """exists() queries must bind filter values with correct types."""
+    query = TypeModel.objects.filter(**filters)
+    clone = query._clone()
+    clone._exists = True
+    _, params = clone.sql(dialect=dialect, with_types=True)
+    assert params == expected, f"[{dialect}] exists {name}: {params} != {expected}"

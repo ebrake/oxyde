@@ -295,14 +295,12 @@ class ExecutionMixin:
         """
         exec_client = await _resolve_execution_client(using, client)
 
-        # Build minimal exists IR with LIMIT 1
-        query_ir = ir.build_select_ir(
-            table=self.model_class.get_table_name(),
-            filter_tree=self._build_filter_tree(),
-            joins=self._join_specs_to_ir() or None,
-            limit=1,
-            exists=True,
-        )
+        # Clone query with exists flag goes through to_ir() so col_types
+        # and all other IR fields are included automatically.
+        clone = self._clone()
+        clone._exists = True
+        clone._limit_value = 1
+        query_ir = clone.to_ir()
 
         result_bytes = await exec_client.execute(query_ir)
         result = msgpack.unpackb(result_bytes, raw=False)
