@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from typing_extensions import Self
+
 from oxyde.core import ir
-from oxyde.queries.base import TQuery
 from oxyde.queries.q import Q
 
 if TYPE_CHECKING:
@@ -19,11 +20,11 @@ class FilteringMixin:
     _filter_tree: ir.FilterNode | None
     model_class: type[Model]
 
-    def _clone(self: TQuery) -> TQuery:
+    def _clone(self) -> Self:
         """Must be implemented by the main Query class."""
         raise NotImplementedError
 
-    def filter(self: TQuery, *args: Any, **kwargs: Any) -> TQuery:
+    def filter(self, *args: Any, **kwargs: Any) -> Self:
         """
         Filter by Q-expressions or field lookups.
 
@@ -80,7 +81,7 @@ class FilteringMixin:
 
         return clone
 
-    def exclude(self: TQuery, *args: Any, **kwargs: Any) -> TQuery:
+    def exclude(self, *args: Any, **kwargs: Any) -> Self:
         """
         Add negated filter conditions.
 

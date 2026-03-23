@@ -55,9 +55,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from typing_extensions import Self
+
 from oxyde.core import ir
 from oxyde.models.utils import _unwrap_optional
-from oxyde.queries.base import TQuery, _model_key
+from oxyde.queries.base import _model_key
 from oxyde.queries.joins import _JoinDescriptor
 from oxyde.queries.mixins import (
     AggregationMixin,
@@ -123,7 +125,7 @@ class Query(
         self._count: bool = False
         self._exists: bool = False
 
-    def _clone(self: TQuery) -> TQuery:
+    def _clone(self) -> Self:
         """Create a copy of this query."""
         clone = self.__class__(self.model_class)
         # Filtering
@@ -155,7 +157,7 @@ class Query(
         clone._exists = self._exists
         return clone
 
-    def select(self: TQuery, *fields: str) -> TQuery:
+    def select(self, *fields: str) -> Self:
         """Specify fields to select."""
         if not fields:
             raise ValueError("select() requires at least one column name")
@@ -163,7 +165,7 @@ class Query(
         clone._selected_fields = list(fields)
         return clone
 
-    def for_update(self: TQuery) -> TQuery:
+    def for_update(self) -> Self:
         """Add FOR UPDATE lock to query.
 
         Locks selected rows for update, preventing other transactions
@@ -184,7 +186,7 @@ class Query(
         clone._lock_type = "update"
         return clone
 
-    def for_share(self: TQuery) -> TQuery:
+    def for_share(self) -> Self:
         """Add FOR SHARE lock to query.
 
         Locks selected rows for reading, preventing other transactions

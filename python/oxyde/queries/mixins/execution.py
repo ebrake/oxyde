@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 import msgpack
 from pydantic import TypeAdapter
+from typing_extensions import Self
 
 from oxyde.core import ir
 from oxyde.exceptions import FieldLookupError, MultipleObjectsReturned, NotFoundError
@@ -19,7 +20,6 @@ from oxyde.queries.base import (
     _TYPE_ADAPTER_CACHE,
     _TYPE_ADAPTER_LOCK,
     SupportsExecute,
-    TQuery,
     _primary_key_meta,
     _resolve_execution_client,
     _resolve_registered_model,
@@ -53,7 +53,7 @@ class ExecutionMixin:
     _order_by_fields: list[tuple[str, str]]
     _group_by_fields: list[str]
 
-    def _clone(self: TQuery) -> TQuery:
+    def _clone(self) -> Self:
         """Must be implemented by the main Query class."""
         raise NotImplementedError
 
@@ -61,7 +61,7 @@ class ExecutionMixin:
         """Must be implemented by the main Query class."""
         raise NotImplementedError
 
-    def limit(self: TQuery, value: int) -> TQuery:
+    def limit(self, value: int) -> Self:
         """Must be implemented by PaginationMixin."""
         raise NotImplementedError
 

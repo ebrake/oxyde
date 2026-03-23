@@ -5,10 +5,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 import msgpack
+from typing_extensions import Self
 
 from oxyde.core.wrapper import explain_query, render_sql_debug
 from oxyde.db.pool import _msgpack_encoder
-from oxyde.queries.base import SupportsExecute, TQuery, _resolve_pool_name
+from oxyde.queries.base import SupportsExecute, _resolve_pool_name
 
 if TYPE_CHECKING:
     from oxyde.models.base import Model
@@ -22,7 +23,7 @@ class DebugMixin:
     _union_query: DebugMixin | None
     _union_all: bool
 
-    def _clone(self: TQuery) -> TQuery:
+    def _clone(self) -> Self:
         """Must be implemented by the main Query class."""
         raise NotImplementedError
 
@@ -113,7 +114,7 @@ class DebugMixin:
 
         return runner()
 
-    def union(self: TQuery, other_query: DebugMixin) -> TQuery:
+    def union(self, other_query: DebugMixin) -> Self:
         """
         Combine with another query using UNION (removes duplicates).
 
@@ -130,7 +131,7 @@ class DebugMixin:
         clone._union_all = False
         return clone
 
-    def union_all(self: TQuery, other_query: DebugMixin) -> TQuery:
+    def union_all(self, other_query: DebugMixin) -> Self:
         """
         Combine with another query using UNION ALL (keeps duplicates).
 

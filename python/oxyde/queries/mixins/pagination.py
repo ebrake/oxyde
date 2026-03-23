@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from oxyde.queries.base import TQuery
+from typing_extensions import Self
 
 
 class PaginationMixin:
@@ -17,15 +17,15 @@ class PaginationMixin:
     _values_flat: bool
     _selected_fields: list[str] | None
 
-    def _clone(self: TQuery) -> TQuery:
+    def _clone(self) -> Self:
         """Must be implemented by the main Query class."""
         raise NotImplementedError
 
-    def select(self, *fields: str) -> TQuery:
+    def select(self, *fields: str) -> Self:
         """Must be implemented by the main Query class."""
         raise NotImplementedError
 
-    def limit(self: TQuery, value: int) -> TQuery:
+    def limit(self, value: int) -> Self:
         """Set LIMIT."""
         if value < 0:
             raise ValueError(f"limit() requires a non-negative value, got {value}")
@@ -33,7 +33,7 @@ class PaginationMixin:
         clone._limit_value = value
         return clone
 
-    def offset(self: TQuery, value: int) -> TQuery:
+    def offset(self, value: int) -> Self:
         """Set OFFSET."""
         if value < 0:
             raise ValueError(f"offset() requires a non-negative value, got {value}")
@@ -41,7 +41,7 @@ class PaginationMixin:
         clone._offset_value = value
         return clone
 
-    def order_by(self: TQuery, *fields: str) -> TQuery:
+    def order_by(self, *fields: str) -> Self:
         """Set ORDER BY fields."""
         clone = self._clone()
         for field in fields:
@@ -51,13 +51,13 @@ class PaginationMixin:
                 clone._order_by_fields.append((field, "ASC"))
         return clone
 
-    def distinct(self: TQuery, distinct: bool = True) -> TQuery:
+    def distinct(self, distinct: bool = True) -> Self:
         """Set DISTINCT."""
         clone = self._clone()
         clone._distinct = bool(distinct)
         return clone
 
-    def values(self: TQuery, *fields: str) -> TQuery:
+    def values(self, *fields: str) -> Self:
         """Return results as dictionaries."""
         clone = self._clone()
         if fields:
@@ -65,7 +65,7 @@ class PaginationMixin:
         clone._result_mode = "dict"
         return clone
 
-    def values_list(self: TQuery, *fields: str, flat: bool = False) -> TQuery:
+    def values_list(self, *fields: str, flat: bool = False) -> Self:
         """Return results as tuples (or flat list if flat=True and single field)."""
         clone = self._clone()
         if fields:
@@ -76,7 +76,7 @@ class PaginationMixin:
         clone._values_flat = flat
         return clone
 
-    def __getitem__(self: TQuery, key: slice | int) -> TQuery:
+    def __getitem__(self, key: slice | int) -> Self:
         """Support slicing: query[0:10] or query[5]."""
         if isinstance(key, slice):
             start = key.start or 0

@@ -5,11 +5,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 import msgpack
+from typing_extensions import Self
 
 from oxyde.core import ir
 from oxyde.models.lookups import ALL_LOOKUPS
 from oxyde.queries.aggregates import Avg, Max, Min, Sum
-from oxyde.queries.base import SupportsExecute, TQuery, _resolve_execution_client
+from oxyde.queries.base import SupportsExecute, _resolve_execution_client
 from oxyde.queries.q import Q
 
 if TYPE_CHECKING:
@@ -37,7 +38,7 @@ class AggregationMixin:
     _offset_value: int | None
     _order_by_fields: list[tuple[str, str]]
 
-    def _clone(self: TQuery) -> TQuery:
+    def _clone(self) -> Self:
         """Must be implemented by the main Query class."""
         raise NotImplementedError
 
@@ -53,7 +54,7 @@ class AggregationMixin:
         """Must be implemented by JoiningMixin."""
         raise NotImplementedError
 
-    def annotate(self: TQuery, **annotations) -> TQuery:
+    def annotate(self, **annotations) -> Self:
         """
         Add computed fields using aggregate functions.
 
@@ -68,7 +69,7 @@ class AggregationMixin:
         clone._annotations.update(annotations)
         return clone
 
-    def group_by(self: TQuery, *fields: str) -> TQuery:
+    def group_by(self, *fields: str) -> Self:
         """
         Add GROUP BY clause.
 
@@ -82,7 +83,7 @@ class AggregationMixin:
         clone._group_by_fields.extend(fields)
         return clone
 
-    def having(self: TQuery, *q_exprs, **kwargs) -> TQuery:
+    def having(self, *q_exprs, **kwargs) -> Self:
         """
         Add HAVING clause for filtering grouped results.
 

@@ -5,9 +5,10 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
+from typing_extensions import Self
+
 from oxyde.exceptions import FieldLookupError
 from oxyde.queries.base import (
-    TQuery,
     _collect_model_columns,
     _primary_key_meta,
     _resolve_registered_model,
@@ -26,11 +27,11 @@ class JoiningMixin:
     _join_specs: list[_JoinDescriptor]
     _prefetch_paths: list[str]
 
-    def _clone(self: TQuery) -> TQuery:
+    def _clone(self) -> Self:
         """Must be implemented by the main Query class."""
         raise NotImplementedError
 
-    def join(self: TQuery, *paths: str) -> TQuery:
+    def join(self, *paths: str) -> Self:
         """
         Add LEFT JOIN for related models.
 
@@ -48,7 +49,7 @@ class JoiningMixin:
             clone._add_join_path(path)
         return clone
 
-    def prefetch(self: TQuery, *paths: str) -> TQuery:
+    def prefetch(self, *paths: str) -> Self:
         """
         Prefetch related objects (separate queries).
 
