@@ -4,6 +4,19 @@ All notable changes to Oxyde are documented here.
 
 ---
 
+## 0.6.1 - 2026-03-24
+
+### Bug Fixes
+
+- **`count()` and `exists()` bypassed `to_ir()`** — both methods built their IR directly via `ir.build_select_ir()`, skipping the full `to_ir()` pipeline. This meant `col_types` and other query state were not included, which could produce incorrect SQL when type-sensitive filters were involved. Both now go through `to_ir()` like all other query methods.
+- **`save(update_fields)` silently ignored FK field names** — passing a virtual FK name like `update_fields=["author"]` was silently accepted but the field was not included in the UPDATE because it didn't match any database column. Now correctly resolves FK names to their synthetic columns (e.g. `"author"` → `"author_id"`). Virtual relation fields (`reverse_fk`, `m2m`) now raise `FieldError`.
+
+### Internal
+
+- **`TQuery` TypeVar replaced with `Self`** — all query mixins (`FilteringMixin`, `PaginationMixin`, `AggregationMixin`, `ExecutionMixin`, `JoiningMixin`, `DebugMixin`) and `Query` now use `typing_extensions.Self` for return-type annotations instead of the custom `TQuery` TypeVar. Fixes mypy errors with the previous approach.
+
+---
+
 ## 0.6.0 - 2026-03-20
 
 ### Bug Fixes
