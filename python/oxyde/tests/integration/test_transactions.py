@@ -17,7 +17,7 @@ class TestAtomic:
                 name="TxAuthor", email="tx@test.com", using=db.name
             )
 
-        authors = await Author.objects.filter(name="TxAuthor").all(client=db)
+        authors = await Author.objects.filter(name="TxAuthor").all(using=db.name)
         assert len(authors) == 1
         assert authors[0].email == "tx@test.com"
 
@@ -31,7 +31,7 @@ class TestAtomic:
                 )
                 raise ValueError("force rollback")
 
-        authors = await Author.objects.filter(name="RollbackAuthor").all(client=db)
+        authors = await Author.objects.filter(name="RollbackAuthor").all(using=db.name)
         assert len(authors) == 0
 
     @pytest.mark.asyncio
@@ -43,7 +43,7 @@ class TestAtomic:
             )
             ctx.set_rollback()
 
-        authors = await Author.objects.filter(name="ForcedRollback").all(client=db)
+        authors = await Author.objects.filter(name="ForcedRollback").all(using=db.name)
         assert len(authors) == 0
 
 
@@ -64,10 +64,10 @@ class TestNestedTransaction:
             except ValueError:
                 pass
 
-        outer = await Author.objects.filter(name="Outer").all(client=db)
+        outer = await Author.objects.filter(name="Outer").all(using=db.name)
         assert len(outer) == 1
 
-        inner = await Author.objects.filter(name="Inner").all(client=db)
+        inner = await Author.objects.filter(name="Inner").all(using=db.name)
         assert len(inner) == 0
 
 
@@ -82,6 +82,6 @@ class TestRawInTransaction:
         async with atomic(using=db.name):
             await execute_raw(sql, ["RawTx", "rawtx@test.com", True], using=db.name)
 
-        authors = await Author.objects.filter(name="RawTx").all(client=db)
+        authors = await Author.objects.filter(name="RawTx").all(using=db.name)
         assert len(authors) == 1
         assert authors[0].email == "rawtx@test.com"

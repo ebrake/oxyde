@@ -275,7 +275,7 @@ async def _clear_all_tables(database: AsyncDatabase) -> None:
     """Delete all data from tables in reverse FK order."""
     tables = [m.Meta.table_name for m in ALL_MODELS]
     for t in reversed(tables):
-        await execute_raw(f"DELETE FROM {t}", client=database)
+        await execute_raw(f"DELETE FROM {t}", using=database.name)
 
 
 async def _fix_pg_sequences(database: AsyncDatabase) -> None:
@@ -285,7 +285,7 @@ async def _fix_pg_sequences(database: AsyncDatabase) -> None:
         await execute_raw(
             f"SELECT setval(pg_get_serial_sequence('{table}', 'id'), "
             f"GREATEST(COALESCE((SELECT MAX(id) FROM {table}), 1), 1))",
-            client=database,
+            using=database.name,
         )
 
 
@@ -330,7 +330,7 @@ ALIASED_EVENT_SEED = [
 
 async def _seed(database: AsyncDatabase, statements: list[str]) -> None:
     for sql in statements:
-        await execute_raw(sql, client=database)
+        await execute_raw(sql, using=database.name)
     if detect_dialect(database.url) == "postgres":
         await _fix_pg_sequences(database)
 
@@ -350,7 +350,7 @@ async def db(request, tmp_path, _pg_container, _mysql_container):
     """Fresh DB with main seed data, parametrized by dialect."""
     url = _get_url(request.param, tmp_path, _pg_container, _mysql_container)
     database = AsyncDatabase(
-        url, name=f"test_{uuid.uuid4().hex[:12]}", overwrite=True
+        url, name=f"test_{request.param}", overwrite=True
     )
     await database.connect()
     await _ensure_tables(database)
@@ -365,7 +365,7 @@ async def event_db(request, tmp_path, _pg_container, _mysql_container):
     """Fresh DB with event seed data for datetime filtering tests."""
     url = _get_url(request.param, tmp_path, _pg_container, _mysql_container)
     database = AsyncDatabase(
-        url, name=f"evt_{uuid.uuid4().hex[:12]}", overwrite=True
+        url, name=f"evt_{request.param}", overwrite=True
     )
     await database.connect()
     await _ensure_tables(database)
@@ -380,7 +380,7 @@ async def aliased_db(request, tmp_path, _pg_container, _mysql_container):
     """Fresh DB with aliased_events seed for db_column remapping tests."""
     url = _get_url(request.param, tmp_path, _pg_container, _mysql_container)
     database = AsyncDatabase(
-        url, name=f"alias_{uuid.uuid4().hex[:12]}", overwrite=True
+        url, name=f"alias_{request.param}", overwrite=True
     )
     await database.connect()
     await _ensure_tables(database)
@@ -397,18 +397,18 @@ async def create_author(db, **overrides):
     """Create an Author with sensible defaults."""
     defaults = {"name": "Test Author", "email": f"{uuid.uuid4().hex}@test.com"}
     defaults.update(overrides)
-    return await Author.objects.create(**defaults, client=db)
+    return await Author.objects.create(**defaults, using=db.name)
 
 
 async def create_post(db, *, author_id, **overrides):
     """Create a Post with sensible defaults."""
     defaults = {"title": "Test Post", "author_id": author_id}
     defaults.update(overrides)
-    return await Post.objects.create(**defaults, client=db)
+    return await Post.objects.create(**defaults, using=db.name)
 
 
 async def create_tag(db, **overrides):
     """Create a Tag with a unique name."""
     defaults = {"name": f"tag_{uuid.uuid4().hex[:8]}"}
     defaults.update(overrides)
-    return await Tag.objects.create(**defaults, client=db)
+    return await Tag.objects.create(**defaults, using=db.name)

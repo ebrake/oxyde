@@ -10,7 +10,7 @@ class TestJoin:
     @pytest.mark.asyncio
     async def test_join_fk(self, db):
         """Join Post → Author via FK."""
-        posts = await Post.objects.join("author").order_by("id").all(client=db)
+        posts = await Post.objects.join("author").order_by("id").all(using=db.name)
         assert len(posts) == 6
 
         assert posts[0].author is not None
@@ -24,7 +24,7 @@ class TestPrefetch:
     async def test_prefetch_one_to_many(self, db):
         """Prefetch Author → Posts (one-to-many)."""
         authors = await (
-            Author.objects.prefetch("posts").order_by("id").all(client=db)
+            Author.objects.prefetch("posts").order_by("id").all(using=db.name)
         )
         assert len(authors) == 3
 
@@ -40,7 +40,7 @@ class TestPrefetch:
     async def test_prefetch_with_filter(self, db):
         """Prefetch comments only for filtered posts."""
         posts = await (
-            Post.objects.filter(id=1).prefetch("comments").all(client=db)
+            Post.objects.filter(id=1).prefetch("comments").all(using=db.name)
         )
         assert len(posts) == 1
         assert len(posts[0].comments) == 2
@@ -54,7 +54,7 @@ class TestPrefetch:
             Post.objects.filter(id__in=[1, 2, 3])
             .prefetch("tags")
             .order_by("id")
-            .all(client=db)
+            .all(using=db.name)
         )
         assert len(posts) == 3
 

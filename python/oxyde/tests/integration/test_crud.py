@@ -14,7 +14,7 @@ class TestCreate:
     @pytest.mark.asyncio
     async def test_create_single(self, db):
         author = await Author.objects.create(
-            name="Diana", email="diana@test.com", client=db
+            name="Diana", email="diana@test.com", using=db.name
         )
         assert author.name == "Diana"
         assert author.email == "diana@test.com"
@@ -24,7 +24,7 @@ class TestCreate:
     async def test_create_with_defaults(self, db):
         """Fields with defaults should get default values when not passed."""
         post = await Post.objects.create(
-            title="Default Test", author_id=1, client=db
+            title="Default Test", author_id=1, using=db.name
         )
         assert post.title == "Default Test"
         assert post.body == ""
@@ -35,7 +35,7 @@ class TestCreate:
     async def test_create_with_null_fk(self, db):
         """Nullable FK can be None."""
         post = await Post.objects.create(
-            title="No Category", author_id=1, client=db
+            title="No Category", author_id=1, using=db.name
         )
         assert post.category_id is None
 
@@ -47,46 +47,46 @@ class TestBulkCreate:
             Author(name="X", email="x@test.com"),
             Author(name="Y", email="y@test.com"),
         ]
-        created = await Author.objects.bulk_create(authors, client=db)
+        created = await Author.objects.bulk_create(authors, using=db.name)
         assert len(created) == 2
         assert created[0].name == "X"
         assert created[1].name == "Y"
 
-        count = await Author.objects.count(client=db)
+        count = await Author.objects.count(using=db.name)
         assert count == 5  # 3 seed + 2 new
 
     @pytest.mark.asyncio
     async def test_bulk_create_empty(self, db):
-        created = await Author.objects.bulk_create([], client=db)
+        created = await Author.objects.bulk_create([], using=db.name)
         assert created == []
 
 
 class TestGet:
     @pytest.mark.asyncio
     async def test_get_found(self, db):
-        author = await Author.objects.get(id=1, client=db)
+        author = await Author.objects.get(id=1, using=db.name)
         assert author.name == "Alice"
         assert author.email == "alice@test.com"
 
     @pytest.mark.asyncio
     async def test_get_not_found(self, db):
         with pytest.raises(NotFoundError):
-            await Author.objects.get(id=999, client=db)
+            await Author.objects.get(id=999, using=db.name)
 
     @pytest.mark.asyncio
     async def test_get_multiple(self, db):
         with pytest.raises(MultipleObjectsReturned):
-            await Author.objects.get(active=True, client=db)
+            await Author.objects.get(active=True, using=db.name)
 
     @pytest.mark.asyncio
     async def test_get_or_none_found(self, db):
-        author = await Author.objects.get_or_none(id=1, client=db)
+        author = await Author.objects.get_or_none(id=1, using=db.name)
         assert author is not None
         assert author.name == "Alice"
 
     @pytest.mark.asyncio
     async def test_get_or_none_not_found(self, db):
-        author = await Author.objects.get_or_none(id=999, client=db)
+        author = await Author.objects.get_or_none(id=999, using=db.name)
         assert author is None
 
     @pytest.mark.asyncio
@@ -94,7 +94,7 @@ class TestGet:
         author, created = await Author.objects.get_or_create(
             email="alice@test.com",
             defaults={"name": "Alice Clone"},
-            client=db,
+            using=db.name,
         )
         assert created is False
         assert author.name == "Alice"
@@ -104,7 +104,7 @@ class TestGet:
         author, created = await Author.objects.get_or_create(
             email="new@test.com",
             defaults={"name": "New Author"},
-            client=db,
+            using=db.name,
         )
         assert created is True
         assert author.name == "New Author"
@@ -115,19 +115,19 @@ class TestSave:
     @pytest.mark.asyncio
     async def test_save_insert(self, db):
         author = Author(name="SavedNew", email="saved@test.com")
-        saved = await author.save(client=db)
+        saved = await author.save(using=db.name)
         assert saved.id is not None
 
-        fetched = await Author.objects.get(id=saved.id, client=db)
+        fetched = await Author.objects.get(id=saved.id, using=db.name)
         assert fetched.name == "SavedNew"
 
     @pytest.mark.asyncio
     async def test_save_update(self, db):
-        author = await Author.objects.get(id=1, client=db)
+        author = await Author.objects.get(id=1, using=db.name)
         author.name = "Alice Updated"
-        await author.save(client=db)
+        await author.save(using=db.name)
 
-        refreshed = await Author.objects.get(id=1, client=db)
+        refreshed = await Author.objects.get(id=1, using=db.name)
         assert refreshed.name == "Alice Updated"
 
 
@@ -138,25 +138,25 @@ class TestDelete:
         author = await create_author(db, name="ToDelete")
         author_id = author.id
 
-        result = await author.delete(client=db)
+        result = await author.delete(using=db.name)
         assert result >= 1
 
-        deleted = await Author.objects.get_or_none(id=author_id, client=db)
+        deleted = await Author.objects.get_or_none(id=author_id, using=db.name)
         assert deleted is None
 
     @pytest.mark.asyncio
     async def test_delete_queryset(self, db):
-        deleted = await Post.objects.filter(published=False).delete(client=db)
+        deleted = await Post.objects.filter(published=False).delete(using=db.name)
         assert deleted == 2  # Draft Post + Unpublished
 
-        remaining = await Post.objects.count(client=db)
+        remaining = await Post.objects.count(using=db.name)
         assert remaining == 4
 
 
 class TestRefresh:
     @pytest.mark.asyncio
     async def test_refresh(self, db):
-        author = await Author.objects.get(id=1, client=db)
+        author = await Author.objects.get(id=1, using=db.name)
         assert author.name == "Alice"
 
         # Modify directly in DB (placeholder syntax differs per dialect)
@@ -164,13 +164,13 @@ class TestRefresh:
             sql = "UPDATE authors SET name = $1 WHERE id = $2"
         else:
             sql = "UPDATE authors SET name = ? WHERE id = ?"
-        await execute_raw(sql, ["Alice Modified", 1], client=db)
+        await execute_raw(sql, ["Alice Modified", 1], using=db.name)
 
         # Instance still has old value
         assert author.name == "Alice"
 
         # Refresh reloads from DB
-        await author.refresh(client=db)
+        await author.refresh(using=db.name)
         assert author.name == "Alice Modified"
 
 
@@ -178,27 +178,27 @@ class TestUpdate:
     @pytest.mark.asyncio
     async def test_update_queryset(self, db):
         result = await Post.objects.filter(published=True).update(
-            views=0, client=db
+            views=0, using=db.name
         )
         assert result == 4  # 4 published posts
 
-        post = await Post.objects.get(id=1, client=db)
+        post = await Post.objects.get(id=1, using=db.name)
         assert post.views == 0
 
     @pytest.mark.asyncio
     async def test_update_with_f_expression(self, db):
         await Post.objects.filter(id=1).update(
-            views=F("views") + 1, client=db
+            views=F("views") + 1, using=db.name
         )
-        post = await Post.objects.get(id=1, client=db)
+        post = await Post.objects.get(id=1, using=db.name)
         assert post.views == 121  # 120 + 1
 
     @pytest.mark.asyncio
     async def test_increment(self, db):
         result = await Post.objects.filter(id=1).increment(
-            "views", by=5, client=db
+            "views", by=5, using=db.name
         )
         assert result >= 1
 
-        post = await Post.objects.get(id=1, client=db)
+        post = await Post.objects.get(id=1, using=db.name)
         assert post.views == 125  # 120 + 5

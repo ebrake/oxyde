@@ -11,45 +11,45 @@ from .conftest import Author, Post
 class TestAggregateShortcuts:
     @pytest.mark.asyncio
     async def test_count(self, db):
-        count = await Post.objects.filter(published=True).count(client=db)
+        count = await Post.objects.filter(published=True).count(using=db.name)
         assert count == 4
 
     @pytest.mark.asyncio
     async def test_count_with_join(self, db):
         """count() must work when join() is applied (no dedup panic)."""
-        count = await Post.objects.join("author").count(client=db)
+        count = await Post.objects.join("author").count(using=db.name)
         assert count == 6
 
     @pytest.mark.asyncio
     async def test_count_with_join_and_filter(self, db):
         """count() with join + filter on joined field."""
-        count = await Post.objects.join("author").filter(author__name="Alice").count(client=db)
+        count = await Post.objects.join("author").filter(author__name="Alice").count(using=db.name)
         assert count == 2
 
     @pytest.mark.asyncio
     async def test_exists_with_join(self, db):
         """exists() must work when join() is applied (no dedup panic)."""
-        exists = await Post.objects.join("author").exists(client=db)
+        exists = await Post.objects.join("author").exists(using=db.name)
         assert exists is True
 
     @pytest.mark.asyncio
     async def test_sum(self, db):
-        total = await Post.objects.filter(published=True).sum("views", client=db)
+        total = await Post.objects.filter(published=True).sum("views", using=db.name)
         assert total == 435  # 120 + 35 + 80 + 200
 
     @pytest.mark.asyncio
     async def test_avg(self, db):
-        average = await Post.objects.filter(published=True).avg("views", client=db)
+        average = await Post.objects.filter(published=True).avg("views", using=db.name)
         assert average == pytest.approx(108.75)
 
     @pytest.mark.asyncio
     async def test_max(self, db):
-        maximum = await Post.objects.max("views", client=db)
+        maximum = await Post.objects.max("views", using=db.name)
         assert maximum == 200
 
     @pytest.mark.asyncio
     async def test_min(self, db):
-        minimum = await Post.objects.filter(published=True).min("views", client=db)
+        minimum = await Post.objects.filter(published=True).min("views", using=db.name)
         assert minimum == 35
 
 
@@ -62,7 +62,7 @@ class TestAnnotateGroupBy:
             .group_by("author_id")
             .order_by("author_id")
             .values("author_id", "n")
-            .all(client=db)
+            .all(using=db.name)
         )
         assert len(rows) == 3
         counts = [r["n"] for r in rows]
@@ -75,7 +75,7 @@ class TestAnnotateGroupBy:
             await (
                 Post.objects.annotate(n=Count("id"))
                 .group_by("author_id")
-                .all(client=db)
+                .all(using=db.name)
             )
 
     @pytest.mark.asyncio
@@ -86,7 +86,7 @@ class TestAnnotateGroupBy:
             .group_by("author_id")
             .having(total__gt=100)
             .values("author_id", "total")
-            .all(client=db)
+            .all(using=db.name)
         )
         # Alice: 120+35=155, Bob: 80+0=80, Charlie: 200+0=200
         assert len(rows) == 2  # Alice and Charlie
