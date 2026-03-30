@@ -40,7 +40,7 @@ fn test_python_type_to_sql_all_dialects() {
     );
     assert_eq!(
         python_type_to_sql("datetime", Dialect::Mysql, false),
-        "DATETIME"
+        "DATETIME(6)"
     );
 
     // Test uuid type

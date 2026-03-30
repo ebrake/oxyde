@@ -18,6 +18,8 @@ fn sample_field(name: &str) -> FieldDef {
         default: None,
         auto_increment: false,
         max_length: None,
+        max_digits: None,
+        decimal_places: None,
     }
 }
 
@@ -35,6 +37,8 @@ fn sample_table() -> TableDef {
                 default: None,
                 auto_increment: false,
                 max_length: None,
+                max_digits: None,
+                decimal_places: None,
             },
             sample_field("email"),
         ],
@@ -88,6 +92,8 @@ fn test_sqlite_create_table_with_fk_inline() {
                 default: None,
                 auto_increment: true,
                 max_length: None,
+                max_digits: None,
+                decimal_places: None,
             },
             FieldDef {
                 name: "author_id".into(),
@@ -99,6 +105,8 @@ fn test_sqlite_create_table_with_fk_inline() {
                 default: None,
                 auto_increment: false,
                 max_length: None,
+                max_digits: None,
+                decimal_places: None,
             },
         ],
         indexes: vec![],
@@ -166,6 +174,8 @@ fn test_postgres_create_table_with_fk_as_alter() {
             default: None,
             auto_increment: false,
             max_length: None,
+            max_digits: None,
+            decimal_places: None,
         }],
         indexes: vec![],
         foreign_keys: vec![ForeignKeyDef {
@@ -270,6 +280,8 @@ fn test_dialect_specific_sql() {
         default: None,
         auto_increment: true,
         max_length: None,
+        max_digits: None,
+        decimal_places: None,
     };
     let table = TableDef {
         name: "test".into(),
@@ -345,6 +357,8 @@ fn test_sqlite_alter_column_returns_error_without_schema() {
         default: None,
         auto_increment: false,
         max_length: None,
+        max_digits: None,
+        decimal_places: None,
     };
     let new_field = FieldDef {
         name: "age".into(),
@@ -356,6 +370,8 @@ fn test_sqlite_alter_column_returns_error_without_schema() {
         default: None,
         auto_increment: false,
         max_length: None,
+        max_digits: None,
+        decimal_places: None,
     };
 
     let result = MigrationOp::AlterColumn {
@@ -393,6 +409,8 @@ fn test_sqlite_alter_column_with_schema_generates_rebuild() {
         default: None,
         auto_increment: false,
         max_length: None,
+        max_digits: None,
+        decimal_places: None,
     };
     let new_field = FieldDef {
         name: "age".into(),
@@ -404,6 +422,8 @@ fn test_sqlite_alter_column_with_schema_generates_rebuild() {
         default: None,
         auto_increment: false,
         max_length: None,
+        max_digits: None,
+        decimal_places: None,
     };
 
     // Full table schema
@@ -418,6 +438,8 @@ fn test_sqlite_alter_column_with_schema_generates_rebuild() {
             default: None,
             auto_increment: true,
             max_length: None,
+            max_digits: None,
+            decimal_places: None,
         },
         old_field.clone(),
         FieldDef {
@@ -430,6 +452,8 @@ fn test_sqlite_alter_column_with_schema_generates_rebuild() {
             default: None,
             auto_increment: false,
             max_length: None,
+            max_digits: None,
+            decimal_places: None,
         },
     ];
 
@@ -512,6 +536,8 @@ fn test_rename_column_mysql_with_field_def() {
         default: Some("'default'".into()),
         auto_increment: false,
         max_length: None,
+        max_digits: None,
+        decimal_places: None,
     };
 
     let sql = MigrationOp::RenameColumn {
@@ -596,6 +622,8 @@ fn test_compute_diff_detects_alter_column() {
                 default: None,
                 auto_increment: true,
                 max_length: None,
+                max_digits: None,
+                decimal_places: None,
             },
             FieldDef {
                 name: "email".into(),
@@ -607,6 +635,8 @@ fn test_compute_diff_detects_alter_column() {
                 default: None,
                 auto_increment: false,
                 max_length: None,
+                max_digits: None,
+                decimal_places: None,
             },
         ],
         indexes: vec![],
@@ -631,6 +661,8 @@ fn test_compute_diff_detects_alter_column() {
                 default: None,
                 auto_increment: true,
                 max_length: None,
+                max_digits: None,
+                decimal_places: None,
             },
             FieldDef {
                 name: "email".into(),
@@ -642,6 +674,8 @@ fn test_compute_diff_detects_alter_column() {
                 default: None,
                 auto_increment: false,
                 max_length: None,
+                max_digits: None,
+                decimal_places: None,
             },
         ],
         indexes: vec![],
@@ -686,6 +720,8 @@ fn test_postgres_alter_column_unique_constraint() {
         default: None,
         auto_increment: false,
         max_length: None,
+        max_digits: None,
+        decimal_places: None,
     };
     let new_field = FieldDef {
         name: "email".into(),
@@ -697,6 +733,8 @@ fn test_postgres_alter_column_unique_constraint() {
         default: None,
         auto_increment: false,
         max_length: None,
+        max_digits: None,
+        decimal_places: None,
     };
 
     let sql = MigrationOp::AlterColumn {
