@@ -45,8 +45,11 @@ def _get_python_type_name(python_type: Any) -> str:
     elif isinstance(python_type, type) and issubclass(python_type, Model):
         # FK field pointing to another model
         return python_type.__name__
+    elif isinstance(python_type, type):
+        # Bare built-in types (dict, list, set, tuple, etc.)
+        return python_type.__name__
     else:
-        # For complex types, use string representation
+        # For complex types (e.g. list[str], dict[str, Any]), use string representation
         return str(python_type).replace("typing.", "")
 
 
