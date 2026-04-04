@@ -54,6 +54,9 @@ class StubCore:
         self.execute_in_tx_calls.append((tx_id, ir_bytes))
         return b"{}"
 
+    async def pool_backend(self, pool_name: str) -> str:
+        return "sqlite"
+
 
 @pytest.mark.asyncio
 async def test_register_and_retrieve_connection(
@@ -67,6 +70,7 @@ async def test_register_and_retrieve_connection(
     monkeypatch.setattr(_pool_module, "close_all_pools", stub.close_all_pools)
     monkeypatch.setattr(_reg_module, "close_all_pools", stub.close_all_pools)
     monkeypatch.setattr(_pool_module, "_execute", stub.execute)
+    monkeypatch.setattr(_pool_module, "_pool_backend", stub.pool_backend)
     monkeypatch.setattr(
         _tx_module, "_execute_in_transaction", stub.execute_in_transaction
     )
@@ -120,6 +124,7 @@ async def test_transaction_context(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_pool_module, "close_all_pools", stub.close_all_pools)
     monkeypatch.setattr(_reg_module, "close_all_pools", stub.close_all_pools)
     monkeypatch.setattr(_pool_module, "_execute", stub.execute)
+    monkeypatch.setattr(_pool_module, "_pool_backend", stub.pool_backend)
     monkeypatch.setattr(
         _tx_module, "_execute_in_transaction", stub.execute_in_transaction
     )
@@ -176,6 +181,7 @@ async def test_transaction_timeout_rolls_back(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(_pool_module, "close_all_pools", stub.close_all_pools)
     monkeypatch.setattr(_reg_module, "close_all_pools", stub.close_all_pools)
     monkeypatch.setattr(_pool_module, "_execute", stub.execute)
+    monkeypatch.setattr(_pool_module, "_pool_backend", stub.pool_backend)
     monkeypatch.setattr(
         _tx_module, "_execute_in_transaction", slow_execute_in_transaction
     )

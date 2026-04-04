@@ -71,6 +71,8 @@ _FUNCTION_REGISTRY: list[tuple[str, str, bool, bool]] = [
     ("create_savepoint", "create_savepoint", True, False),
     ("rollback_to_savepoint", "rollback_to_savepoint", True, False),
     ("release_savepoint", "release_savepoint", True, False),
+    # Pool introspection
+    ("pool_backend", "pool_backend", True, False),
     # Debug/introspection
     ("render_sql", "render_sql", True, False),
     ("render_sql_debug", "render_sql_debug", False, False),
@@ -170,6 +172,7 @@ create_savepoint = _exports["create_savepoint"]
 rollback_to_savepoint = _exports["rollback_to_savepoint"]
 release_savepoint = _exports["release_savepoint"]
 register_validator = _exports["register_validator"]
+pool_backend = _exports["pool_backend"]
 render_sql = _exports["render_sql"]
 render_sql_debug = _exports["render_sql_debug"]
 explain_query = _exports["explain_query"]
@@ -190,6 +193,7 @@ __all__ = [
     "rollback_to_savepoint",
     "release_savepoint",
     "register_validator",
+    "pool_backend",
     "render_sql",
     "render_sql_debug",
     "explain_query",

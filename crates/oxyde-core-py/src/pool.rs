@@ -5,10 +5,10 @@ use oxyde_driver::{
     begin_transaction as driver_begin_transaction, close_all_pools as driver_close_all_pools,
     close_pool as driver_close_pool, commit_transaction as driver_commit_transaction,
     create_savepoint as driver_create_savepoint, init_pool as driver_init_pool,
-    init_pool_overwrite as driver_init_pool_overwrite,
+    init_pool_overwrite as driver_init_pool_overwrite, pool_backend as driver_pool_backend,
     release_savepoint as driver_release_savepoint,
     rollback_to_savepoint as driver_rollback_to_savepoint,
-    rollback_transaction as driver_rollback_transaction,
+    rollback_transaction as driver_rollback_transaction, DatabaseBackend,
 };
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -129,6 +129,22 @@ pub(crate) fn rollback_to_savepoint(
             .await
             .map_err(|e| PyErr::new::<PyRuntimeError, _>(e.to_string()))?;
         Ok(())
+    })
+}
+
+/// Get the database backend type for a named pool -> Coroutine[str].
+/// Returns "postgres", "mysql", or "sqlite".
+#[pyfunction]
+pub(crate) fn pool_backend(py: Python<'_>, pool_name: String) -> PyResult<Bound<'_, PyAny>> {
+    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let backend = driver_pool_backend(&pool_name)
+            .await
+            .map_err(|e| PyErr::new::<PyRuntimeError, _>(e.to_string()))?;
+        Ok(match backend {
+            DatabaseBackend::Postgres => "postgres",
+            DatabaseBackend::MySql => "mysql",
+            DatabaseBackend::Sqlite => "sqlite",
+        })
     })
 }
 

@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 import msgpack
 
 from oxyde.core import ir
+from oxyde.db.registry import get_connection
 from oxyde.exceptions import IntegrityError, ManagerError
 from oxyde.models.serializers import (
     _dump_insert_data,
@@ -17,6 +18,7 @@ from oxyde.models.serializers import (
 from oxyde.queries.base import (
     SupportsExecute,
     _build_col_types,
+    _collect_model_columns,
     _map_values_to_columns,
     _model_key,
     _resolve_execution_client,
@@ -26,6 +28,43 @@ from oxyde.queries.insert import InsertQuery
 
 if TYPE_CHECKING:
     from oxyde.models.base import Model
+
+
+async def _is_mysql(using: str | None, client: SupportsExecute | None) -> bool:
+    """Check if the target database is MySQL via cached backend from Rust."""
+    if client is not None:
+        # AsyncTransaction → ._database, AsyncDatabase → direct
+        db = getattr(client, "_database", client)
+        return getattr(db, "backend", None) == "mysql"
+    alias = using or "default"
+    db = await get_connection(alias, ensure_connected=False)
+    return db.backend == "mysql"
+
+
+def _hydrate_models(
+    model_class: type[Model], columns: list[str], rows: list[list[Any]]
+) -> list[Model]:
+    """Convert raw columns + rows into validated model instances."""
+    rmap = model_class._db_meta.reverse_column_map
+    field_columns = [rmap.get(c, c) for c in columns] if rmap else columns
+    return [model_class.model_validate(dict(zip(field_columns, row))) for row in rows]
+
+
+def _decode_returning_models(
+    model_class: type[Model], result: dict[str, Any]
+) -> list[Model]:
+    """Decode mutation-returning result {columns, rows} into model instances."""
+    rows = result.get("rows", [])
+    if not rows:
+        return []
+    return _hydrate_models(model_class, result.get("columns", []), rows)
+
+
+def _decode_columnar_models(model_class: type[Model], result: list[Any]) -> list[Model]:
+    """Decode columnar SELECT result [columns, rows] into model instances."""
+    if len(result) < 2 or not result[1]:
+        return []
+    return _hydrate_models(model_class, result[0], result[1])
 
 
 class MutationMixin:
@@ -75,6 +114,26 @@ class MutationMixin:
         result = msgpack.unpackb(result_bytes, raw=False)
         return result.get("affected", 0)
 
+    @overload
+    async def update(
+        self,
+        *,
+        returning: Literal[True],
+        using: str | None = ...,
+        client: SupportsExecute | None = ...,
+        **values: Any,
+    ) -> list[Model]: ...
+
+    @overload
+    async def update(
+        self,
+        *,
+        returning: Literal[False] = ...,
+        using: str | None = ...,
+        client: SupportsExecute | None = ...,
+        **values: Any,
+    ) -> int: ...
+
     async def update(
         self,
         *,
@@ -82,24 +141,24 @@ class MutationMixin:
         using: str | None = None,
         client: SupportsExecute | None = None,
         **values: Any,
-    ) -> int | list[dict[str, Any]]:
+    ) -> int | list[Model]:
         """
         Update records matching the query.
 
         Args:
-            returning: If True, return updated rows as dicts (RETURNING *).
+            returning: If True, return updated model instances.
                 Default False — returns number of affected rows (Django-compatible).
             using: Database alias
             client: Optional database client
             **values: Field values to update
 
         Returns:
-            Number of affected rows (default), or list of updated row dicts
+            Number of affected rows (default), or list of updated model instances
             if returning=True.
 
         Examples:
             count = await Post.objects.filter(id=42).update(status="published")
-            rows = await Post.objects.filter(id=42).update(
+            posts = await Post.objects.filter(id=42).update(
                 status="published", returning=True
             )
         """
@@ -109,6 +168,12 @@ class MutationMixin:
         serialized_values = {
             key: _serialize_value_for_ir(value) for key, value in mapped_values.items()
         }
+
+        if returning and await _is_mysql(using, client):
+            return await self._mysql_update_returning(
+                using, client, exec_client, serialized_values, col_types
+            )
+
         update_ir = ir.build_update_ir(
             table=self.model_class.get_table_name(),
             values=serialized_values,
@@ -120,12 +185,86 @@ class MutationMixin:
         result_bytes = await exec_client.execute(update_ir)
         result = msgpack.unpackb(result_bytes, raw=False)
         if returning:
-            rmap = self.model_class._db_meta.reverse_column_map
-            raw_columns = result.get("columns", [])
-            columns = [rmap.get(c, c) for c in raw_columns] if rmap else raw_columns
-            rows = result.get("rows", [])
-            return [dict(zip(columns, row)) for row in rows]
+            return _decode_returning_models(self.model_class, result)
         return result.get("affected", 0)
+
+    async def _mysql_update_returning(
+        self,
+        using: str | None,
+        client: SupportsExecute | None,
+        exec_client: SupportsExecute,
+        serialized_values: dict[str, Any],
+        col_types: dict[str, str] | None,
+    ) -> list[Model]:
+        """MySQL fallback: SELECT PKs FOR UPDATE → UPDATE → re-fetch by PKs."""
+        from oxyde.db.transaction import atomic, get_active_transaction
+
+        pk_field = self.model_class._db_meta.pk_field
+        if pk_field is None:
+            raise ManagerError("update(returning=True) requires a primary key")
+        meta = self.model_class._db_meta.field_metadata[pk_field]
+        pk_db_col: str = meta.db_column or pk_field
+        table = self.model_class.get_table_name()
+        filter_tree = self._build_filter_tree()
+        alias = using or "default"
+
+        async def _do(tx_client: SupportsExecute) -> list[Model]:
+            # 1. Collect PKs with FOR UPDATE lock
+            select_pks_ir = ir.build_select_ir(
+                table=table,
+                columns=[pk_db_col],
+                filter_tree=filter_tree,
+                col_types=col_types,
+                lock="update",
+            )
+            pk_bytes = await tx_client.execute(select_pks_ir)
+            # Columnar format: [columns_list, rows_list]
+            pk_result = msgpack.unpackb(pk_bytes, raw=False)
+            pk_rows = pk_result[1] if len(pk_result) >= 2 else []
+            pk_values = [row[0] for row in pk_rows]
+
+            if not pk_values:
+                return []
+
+            # 2. Execute UPDATE (no returning)
+            update_ir = ir.build_update_ir(
+                table=table,
+                values=serialized_values,
+                filter_tree=filter_tree,
+                col_types=col_types,
+                model=_model_key(self.model_class),
+                returning=False,
+            )
+            await tx_client.execute(update_ir)
+
+            # 3. Re-fetch updated rows by PKs
+            pk_in_filter: ir.FilterNode = {
+                "type": "condition",
+                "field": pk_db_col,
+                "operator": "IN",
+                "value": pk_values,
+            }
+            all_db_cols = [
+                db_col for _, db_col in _collect_model_columns(self.model_class)
+            ]
+            refetch_ir = ir.build_select_ir(
+                table=table,
+                columns=all_db_cols,
+                filter_tree=pk_in_filter,
+                col_types=col_types,
+            )
+            refetch_bytes = await tx_client.execute(refetch_ir)
+            # Columnar format: [columns_list, rows_list]
+            refetch_result = msgpack.unpackb(refetch_bytes, raw=False)
+            return _decode_columnar_models(self.model_class, refetch_result)
+
+        # Use existing transaction or create an implicit one
+        already_in_tx = client is not None or get_active_transaction(alias) is not None
+        if already_in_tx:
+            return await _do(exec_client)
+
+        async with atomic(using=alias) as tx:
+            return await _do(tx)
 
     async def delete(
         self,

@@ -139,7 +139,9 @@ class TestModelSave:
     @pytest.mark.asyncio
     async def test_save_update_not_found_raises(self):
         """Test save() raises NotFoundError when record not found."""
-        stub = StubExecuteClient([{"affected": 0}])
+        stub = StubExecuteClient([
+            {"affected": 0, "columns": [], "rows": []},
+        ])
 
         instance = OxydeTestModel(id=999, name="Ghost")
 

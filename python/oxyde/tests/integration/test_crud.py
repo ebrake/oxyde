@@ -186,6 +186,15 @@ class TestUpdate:
         assert post.views == 0
 
     @pytest.mark.asyncio
+    async def test_update_returning(self, db):
+        result = await Post.objects.filter(id=1).update(
+            views=999, returning=True, using=db.name
+        )
+        assert len(result) == 1
+        assert result[0].views == 999
+        assert result[0].title == "Rust Patterns"
+
+    @pytest.mark.asyncio
     async def test_update_with_f_expression(self, db):
         await Post.objects.filter(id=1).update(
             views=F("views") + 1, using=db.name

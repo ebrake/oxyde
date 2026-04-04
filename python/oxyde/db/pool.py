@@ -68,6 +68,7 @@ try:
     from oxyde.core import execute as _execute
     from oxyde.core import init_pool as _init_pool
     from oxyde.core import init_pool_overwrite as _init_pool_overwrite
+    from oxyde.core import pool_backend as _pool_backend
 except ImportError:
     # Stub for when the Rust module is not built
     async def _execute(pool_name: str, ir_bytes: bytes) -> bytes:
@@ -85,6 +86,9 @@ except ImportError:
         raise RuntimeError("Rust core module not available. Please install oxyde-core.")
 
     async def close_all_pools() -> None:
+        raise RuntimeError("Rust core module not available. Please install oxyde-core.")
+
+    async def _pool_backend(pool_name: str) -> str:
         raise RuntimeError("Rust core module not available. Please install oxyde-core.")
 
 
@@ -215,6 +219,7 @@ class AsyncDatabase:
         self.url = url
         self.name = name
         self.settings = settings or PoolSettings()
+        self.backend: str | None = None
         self._connected = False
         self._connect_lock = asyncio.Lock()
         self._overwrite = overwrite
@@ -238,6 +243,7 @@ class AsyncDatabase:
                 await _init_pool_overwrite(self.name, self.url, payload)
             else:
                 await _init_pool(self.name, self.url, payload)
+            self.backend = await _pool_backend(self.name)
             self._connected = True
 
     async def disconnect(self) -> None:

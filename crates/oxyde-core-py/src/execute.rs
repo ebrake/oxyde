@@ -120,8 +120,10 @@ pub(crate) fn execute<'py>(
                     "UPDATE"
                 };
 
-                // If RETURNING clause is requested, use mutation returning format
-                if ir.returning.unwrap_or(false) {
+                // Use mutation returning only when SQL actually contains RETURNING
+                // (Postgres/SQLite). MySQL never gets RETURNING in SQL, so fall
+                // through to execute_statement to preserve affected-row count.
+                if ir.returning.unwrap_or(false) && sql.contains("RETURNING") {
                     let exec_start = Instant::now();
                     let result = execute_mutation_returning(
                         &pool_name,
@@ -246,7 +248,7 @@ pub(crate) fn execute_in_transaction<'py>(
                 }
             }
             oxyde_codec::Operation::Update | oxyde_codec::Operation::Delete => {
-                if ir.returning.unwrap_or(false) {
+                if ir.returning.unwrap_or(false) && sql.contains("RETURNING") {
                     execute_mutation_returning_in_transaction(
                         tx_id,
                         &sql,

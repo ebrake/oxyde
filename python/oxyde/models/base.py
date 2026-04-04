@@ -84,7 +84,6 @@ from pydantic.fields import FieldInfo, PydanticUndefined
 
 from oxyde.core import register_validator
 from oxyde.core.ir_types import get_ir_type
-from oxyde.db.registry import get_connection
 
 if TYPE_CHECKING:
     from oxyde.queries.base import SupportsExecute
@@ -728,41 +727,13 @@ class Model(BaseModel, metaclass=OxydeModelMeta):
                 )
                 return self
 
-            # MySQL doesn't support RETURNING. Use affected count only
-            try:
-                db = await get_connection(using or "default", ensure_connected=False)
-                supports_returning = not db.url.startswith("mysql")
-            except KeyError:
-                supports_returning = True
-
-            if supports_returning:
-                rows = await manager.filter(**{pk_field: pk_value}).update(
-                    returning=True, client=client, using=using, **values
-                )
-                if not rows:
-                    cls_name = self.__class__.__name__
-                    raise NotFoundError(
-                        f"{cls_name} with {pk_field}={pk_value} not found"
-                    )
-                # Update instance from RETURNING * result (with Pydantic validation)
-                col_to_field = {
-                    meta.db_column: field_name
-                    for field_name, meta in self.__class__._db_meta.field_metadata.items()
-                }
-                row_dict = {
-                    col_to_field.get(col, col): value for col, value in rows[0].items()
-                }
-                validated = self.__class__.model_validate(row_dict)
-                self.__dict__.update(validated.__dict__)
-            else:
-                affected = await manager.filter(**{pk_field: pk_value}).update(
-                    returning=False, client=client, using=using, **values
-                )
-                if not affected:
-                    cls_name = self.__class__.__name__
-                    raise NotFoundError(
-                        f"{cls_name} with {pk_field}={pk_value} not found"
-                    )
+            rows = await manager.filter(**{pk_field: pk_value}).update(
+                returning=True, client=client, using=using, **values
+            )
+            if not rows:
+                cls_name = self.__class__.__name__
+                raise NotFoundError(f"{cls_name} with {pk_field}={pk_value} not found")
+            self.__dict__.update(rows[0].__dict__)
         else:
             created = await manager.create(
                 instance=self, client=client, using=using, _skip_hooks=True

@@ -99,6 +99,7 @@ fn _oxyde_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(pool::create_savepoint, m)?)?;
     m.add_function(wrap_pyfunction!(pool::rollback_to_savepoint, m)?)?;
     m.add_function(wrap_pyfunction!(pool::release_savepoint, m)?)?;
+    m.add_function(wrap_pyfunction!(pool::pool_backend, m)?)?;
     m.add_function(wrap_pyfunction!(execute::execute_in_transaction, m)?)?;
     m.add_function(wrap_pyfunction!(execute::render_sql, m)?)?;
     m.add_function(wrap_pyfunction!(execute::render_sql_debug, m)?)?;

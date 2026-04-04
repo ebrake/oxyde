@@ -13,6 +13,7 @@ from oxyde.db.pool import (
     _normalize_duration,
     _validate_url_scheme,
 )
+
 from oxyde.db.registry import (
     _CONNECTIONS,
     disconnect_all,
@@ -20,6 +21,8 @@ from oxyde.db.registry import (
     register_connection,
 )
 
+async def _mock_pool_backend(pool_name: str) -> str:
+    return "sqlite"
 
 @pytest.fixture(autouse=True)
 def reset_connections():
@@ -274,6 +277,7 @@ class TestAsyncDatabaseConnect:
 
         monkeypatch.setattr("oxyde.db.pool._init_pool", mock_init_pool)
         monkeypatch.setattr("oxyde.db.pool._init_pool_overwrite", mock_init_pool)
+        monkeypatch.setattr("oxyde.db.pool._pool_backend", _mock_pool_backend)
 
         db = AsyncDatabase(
             url="sqlite:///test.db",
@@ -296,6 +300,7 @@ class TestAsyncDatabaseConnect:
 
         monkeypatch.setattr("oxyde.db.pool._init_pool", mock_init_pool)
         monkeypatch.setattr("oxyde.db.pool._init_pool_overwrite", mock_init_pool)
+        monkeypatch.setattr("oxyde.db.pool._pool_backend", _mock_pool_backend)
 
         db = AsyncDatabase(
             url="sqlite:///test.db",
@@ -321,6 +326,7 @@ class TestAsyncDatabaseConnect:
 
         monkeypatch.setattr("oxyde.db.pool._init_pool", mock_init_pool)
         monkeypatch.setattr("oxyde.db.pool._init_pool_overwrite", mock_init_pool)
+        monkeypatch.setattr("oxyde.db.pool._pool_backend", _mock_pool_backend)
         monkeypatch.setattr("oxyde.db.pool.close_pool", mock_close_pool)
 
         db = AsyncDatabase(
@@ -349,6 +355,7 @@ class TestAsyncDatabaseConnect:
 
         monkeypatch.setattr("oxyde.db.pool._init_pool", mock_init_pool)
         monkeypatch.setattr("oxyde.db.pool._init_pool_overwrite", mock_init_pool)
+        monkeypatch.setattr("oxyde.db.pool._pool_backend", _mock_pool_backend)
         monkeypatch.setattr("oxyde.db.pool.close_pool", mock_close_pool)
 
         db = AsyncDatabase(
@@ -384,6 +391,7 @@ class TestAsyncDatabaseContextManager:
 
         monkeypatch.setattr("oxyde.db.pool._init_pool", mock_init_pool)
         monkeypatch.setattr("oxyde.db.pool._init_pool_overwrite", mock_init_pool)
+        monkeypatch.setattr("oxyde.db.pool._pool_backend", _mock_pool_backend)
         monkeypatch.setattr("oxyde.db.pool.close_pool", mock_close_pool)
 
         db = AsyncDatabase(
@@ -476,6 +484,7 @@ class TestConnectionRegistry:
 
         monkeypatch.setattr("oxyde.db.pool._init_pool", mock_init_pool)
         monkeypatch.setattr("oxyde.db.pool._init_pool_overwrite", mock_init_pool)
+        monkeypatch.setattr("oxyde.db.pool._pool_backend", _mock_pool_backend)
 
         db = AsyncDatabase(
             url="sqlite:///test.db",
@@ -506,6 +515,7 @@ class TestConnectionRegistry:
 
         monkeypatch.setattr("oxyde.db.pool._init_pool", mock_init_pool)
         monkeypatch.setattr("oxyde.db.pool._init_pool_overwrite", mock_init_pool)
+        monkeypatch.setattr("oxyde.db.pool._pool_backend", _mock_pool_backend)
         monkeypatch.setattr("oxyde.db.pool.close_all_pools", mock_close_all_pools)
         monkeypatch.setattr("oxyde.db.registry.close_all_pools", mock_close_all_pools)
 
@@ -540,6 +550,7 @@ class TestEnsureConnected:
 
         monkeypatch.setattr("oxyde.db.pool._init_pool", mock_init_pool)
         monkeypatch.setattr("oxyde.db.pool._init_pool_overwrite", mock_init_pool)
+        monkeypatch.setattr("oxyde.db.pool._pool_backend", _mock_pool_backend)
 
         db = AsyncDatabase(
             url="sqlite:///test.db",
@@ -563,6 +574,7 @@ class TestEnsureConnected:
 
         monkeypatch.setattr("oxyde.db.pool._init_pool", mock_init_pool)
         monkeypatch.setattr("oxyde.db.pool._init_pool_overwrite", mock_init_pool)
+        monkeypatch.setattr("oxyde.db.pool._pool_backend", _mock_pool_backend)
 
         db = AsyncDatabase(
             url="sqlite:///test.db",
