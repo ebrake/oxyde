@@ -45,8 +45,14 @@ def _get_python_type_name(python_type: Any) -> str:
     elif isinstance(python_type, type) and issubclass(python_type, Model):
         # FK field pointing to another model
         return python_type.__name__
+    elif hasattr(python_type, "__origin__"):
+        # Parameterized generics (e.g. list[str], dict[str, Any])
+        return str(python_type).replace("typing.", "")
+    elif isinstance(python_type, type):
+        # Bare built-in types (dict, list, set, tuple, etc.)
+        return python_type.__name__
     else:
-        # For complex types, use string representation
+        # Other complex types (e.g. typing constructs)
         return str(python_type).replace("typing.", "")
 
 
