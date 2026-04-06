@@ -66,13 +66,13 @@ def _get_virtual_fields(model_class: type[Model]) -> set[str]:
 def _dump_insert_data(instance: Model) -> dict[str, Any]:
     """Serialize model instance for INSERT operation.
 
-    Excludes virtual relation fields (db_reverse_fk, db_m2m) that don't
-    correspond to actual database columns.
+    Excludes virtual relation fields (db_reverse_fk, db_m2m) and Pydantic
+    computed fields that don't correspond to actual database columns.
     """
-    # Get virtual field names to exclude
     virtual_fields = _get_virtual_fields(instance.__class__)
+    computed_fields = set(instance.__class__.model_computed_fields.keys())
     data = instance.model_dump(
-        mode="python", exclude_unset=True, exclude=virtual_fields
+        mode="python", exclude_unset=True, exclude=virtual_fields | computed_fields
     )
     return data
 
@@ -80,15 +80,17 @@ def _dump_insert_data(instance: Model) -> dict[str, Any]:
 def _dump_update_data(instance: Model, fields: Iterable[str]) -> dict[str, Any]:
     """Serialize specific fields of model instance for UPDATE operation.
 
-    Excludes virtual relation fields (db_reverse_fk, db_m2m) that don't
-    correspond to actual database columns.
+    Excludes virtual relation fields (db_reverse_fk, db_m2m) and Pydantic
+    computed fields that don't correspond to actual database columns.
     """
     virtual_fields = _get_virtual_fields(instance.__class__)
+    computed_fields = set(instance.__class__.model_computed_fields.keys())
+    excluded = virtual_fields | computed_fields
     snapshot = instance.model_dump(mode="python", exclude_none=False)
     return {
         field: snapshot[field]
         for field in fields
-        if field in snapshot and field not in virtual_fields
+        if field in snapshot and field not in excluded
     }
 
 

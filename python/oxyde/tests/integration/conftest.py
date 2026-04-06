@@ -8,6 +8,7 @@ from uuid import UUID
 
 import pytest
 import pytest_asyncio
+from pydantic import computed_field
 
 from oxyde import AsyncDatabase, Field, Model, disconnect_all
 from oxyde.db.schema import create_tables, drop_tables
@@ -179,9 +180,26 @@ class TdModel(Model):
         table_name = "td_model"
 
 
+class Product(Model):
+    """Model with @computed_field for regression test."""
+
+    id: int | None = Field(default=None, db_pk=True)
+    price: float = Field(default=0.0)
+    quantity: int = Field(default=1)
+
+    @computed_field
+    @property
+    def total(self) -> float:
+        return self.price * self.quantity
+
+    class Meta:
+        is_table = True
+        table_name = "products"
+
+
 ALL_MODELS = [
     Event, AliasedEvent, Author, Category, Post, Comment, Tag, PostTag,
-    AllTypes, NullableTypes, BytesModel, TdModel,
+    AllTypes, NullableTypes, BytesModel, TdModel, Product,
 ]
 
 

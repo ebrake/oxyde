@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import computed_field
 
 from oxyde import Field, Model
 from oxyde.exceptions import (
@@ -568,6 +569,67 @@ class TestManagerCount:
         count = await OxydeTestModel.objects.count(client=stub)
 
         assert count == 3
+
+
+class TestComputedFieldExclusion:
+    """Computed fields must not appear in INSERT/UPDATE IR payloads."""
+
+    @pytest.mark.asyncio
+    async def test_create_excludes_computed_field(self):
+        """create() must not send computed field to the database."""
+
+        class _Product(Model):
+            id: int | None = Field(default=None, db_pk=True)
+            price: float = Field(default=0.0)
+            quantity: int = Field(default=1)
+
+            @computed_field
+            @property
+            def total(self) -> float:
+                return self.price * self.quantity
+
+            class Meta:
+                is_table = True
+
+        stub = StubExecuteClient([{"affected": 1, "inserted_ids": [1]}])
+
+        instance = await _Product.objects.create(
+            client=stub, price=10.0, quantity=3
+        )
+
+        assert instance.total == 30.0
+        assert "total" not in stub.calls[0]["values"]
+
+    @pytest.mark.asyncio
+    async def test_bulk_create_excludes_computed_field(self):
+        """bulk_create() must not send computed field to the database."""
+
+        class _Product2(Model):
+            id: int | None = Field(default=None, db_pk=True)
+            price: float = Field(default=0.0)
+            quantity: int = Field(default=1)
+
+            @computed_field
+            @property
+            def total(self) -> float:
+                return self.price * self.quantity
+
+            class Meta:
+                is_table = True
+
+        stub = StubExecuteClient([{"affected": 2, "inserted_ids": [1, 2]}])
+
+        objects = [
+            _Product2(price=5.0, quantity=2),
+            _Product2(price=20.0, quantity=4),
+        ]
+        created = await _Product2.objects.bulk_create(objects, client=stub)
+
+        assert len(created) == 2
+        assert created[0].total == 10.0
+        for call in stub.calls:
+            for row in call.get("bulk_values", []):
+                assert "total" not in row
 
 
 class TestManagerUpsert:

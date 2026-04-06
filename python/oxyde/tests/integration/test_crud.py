@@ -7,7 +7,7 @@ from oxyde import F
 from oxyde.exceptions import MultipleObjectsReturned, NotFoundError
 from oxyde.queries import execute_raw
 
-from .conftest import Author, Post, create_author, create_post
+from .conftest import Author, Post, Product, create_author, create_post
 
 
 class TestCreate:
@@ -211,3 +211,35 @@ class TestUpdate:
 
         post = await Post.objects.get(id=1, using=db.name)
         assert post.views == 125  # 120 + 5
+
+
+class TestComputedField:
+    """Computed fields must be excluded from INSERT/UPDATE payloads."""
+
+    @pytest.mark.asyncio
+    async def test_create_with_computed_field(self, db):
+        product = await Product.objects.create(
+            price=10.0, quantity=3, using=db.name
+        )
+        assert product.id is not None
+        assert product.price == 10.0
+        assert product.quantity == 3
+        assert product.total == 30.0
+
+    @pytest.mark.asyncio
+    async def test_bulk_create_with_computed_field(self, db):
+        products = [
+            Product(price=5.0, quantity=2),
+            Product(price=20.0, quantity=4),
+        ]
+        created = await Product.objects.bulk_create(products, using=db.name)
+        assert len(created) == 2
+        assert created[0].total == 10.0
+        assert created[1].total == 80.0
+
+    @pytest.mark.asyncio
+    async def test_select_with_computed_field(self, db):
+        await Product.objects.create(price=7.0, quantity=5, using=db.name)
+        product = await Product.objects.first(using=db.name)
+        assert product is not None
+        assert product.total == 35.0
