@@ -276,7 +276,7 @@ class AsyncDatabase:
             )
 
         ir_bytes = msgpack.packb(ir, default=_msgpack_encoder)
-        result_bytes = await _execute(self.name, ir_bytes)
+        result_bytes: bytes = await _execute(self.name, ir_bytes)
         return result_bytes
 
     async def __aenter__(self) -> AsyncDatabase:

@@ -237,7 +237,7 @@ class Q:
 
         if op and children:
             # Recursively resolve children
-            child_nodes = []
+            child_nodes: list[FilterNode] = []
             for child in children:
                 node = child.to_filter_node(model_class, query)
                 if node is not None:

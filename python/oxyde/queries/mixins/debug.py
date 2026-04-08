@@ -59,7 +59,8 @@ class DebugMixin:
         """
         query_ir = self.to_ir()
         ir_bytes = msgpack.packb(query_ir, default=_msgpack_encoder)
-        return render_sql_debug(ir_bytes, dialect, with_types)
+        result: tuple[str, list[Any]] = render_sql_debug(ir_bytes, dialect, with_types)
+        return result
 
     def query(self) -> dict[str, Any]:
         """

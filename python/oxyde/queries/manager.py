@@ -135,7 +135,7 @@ class QueryManager:
         *,
         using: str | None = None,
         client: SupportsExecute | None = None,
-    ):
+    ) -> Model | None:
         """Return first result or None."""
         return await self._query().first(using=using, client=client)
 
@@ -144,7 +144,7 @@ class QueryManager:
         *,
         using: str | None = None,
         client: SupportsExecute | None = None,
-    ):
+    ) -> Model | None:
         """Return last result or None."""
         return await self._query().last(using=using, client=client)
 
@@ -154,7 +154,7 @@ class QueryManager:
         using: str | None = None,
         client: SupportsExecute | None = None,
         **filters: Any,
-    ):
+    ) -> Model:
         """Return exactly one result. Raises NotFoundError/MultipleObjectsReturned."""
         q = self._query()
         if filters:
@@ -167,7 +167,7 @@ class QueryManager:
         using: str | None = None,
         client: SupportsExecute | None = None,
         **filters: Any,
-    ):
+    ) -> Model | None:
         """Return one result or None. Raises MultipleObjectsReturned if many."""
         q = self._query()
         if filters:
@@ -229,7 +229,7 @@ class QueryManager:
         *,
         using: str | None = None,
         client: SupportsExecute | None = None,
-    ):
+    ) -> Any:
         """Calculate sum of field values."""
         return await self._query().sum(field, using=using, client=client)
 
@@ -239,7 +239,7 @@ class QueryManager:
         *,
         using: str | None = None,
         client: SupportsExecute | None = None,
-    ):
+    ) -> Any:
         """Calculate average of field values."""
         return await self._query().avg(field, using=using, client=client)
 
@@ -249,7 +249,7 @@ class QueryManager:
         *,
         using: str | None = None,
         client: SupportsExecute | None = None,
-    ):
+    ) -> Any:
         """Get maximum field value."""
         return await self._query().max(field, using=using, client=client)
 
@@ -259,7 +259,7 @@ class QueryManager:
         *,
         using: str | None = None,
         client: SupportsExecute | None = None,
-    ):
+    ) -> Any:
         """Get minimum field value."""
         return await self._query().min(field, using=using, client=client)
 

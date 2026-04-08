@@ -183,7 +183,8 @@ class AsyncTransaction:
                 msg = f"Transaction {self._tx_id} exceeded timeout"
                 raise TransactionTimeoutError(msg) from exc
 
-        return await coro
+        result: bytes = await coro
+        return result
 
     async def __aenter__(self) -> AsyncTransaction:
         await self._database.ensure_connected()
@@ -339,7 +340,8 @@ def get_active_transaction(using: str = "default") -> AsyncTransaction | None:
     """Get the currently active transaction for a connection alias."""
     entry = _get_owned_entry(using)
     if entry:
-        return entry["transaction"]
+        tx: AsyncTransaction = entry["transaction"]
+        return tx
     return None
 
 

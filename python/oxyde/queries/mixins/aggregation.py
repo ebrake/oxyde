@@ -56,7 +56,7 @@ class AggregationMixin:
         """Must be implemented by JoiningMixin."""
         raise NotImplementedError
 
-    def annotate(self, **annotations) -> Self:
+    def annotate(self, **annotations: Any) -> Self:
         """
         Add computed fields using aggregate functions.
 
@@ -85,7 +85,7 @@ class AggregationMixin:
         clone._group_by_fields.extend(fields)
         return clone
 
-    def having(self, *q_exprs, **kwargs) -> Self:
+    def having(self, *q_exprs: Q | Any, **kwargs: Any) -> Self:
         """
         Add HAVING clause for filtering grouped results.
 
@@ -150,13 +150,13 @@ class AggregationMixin:
 
     async def _aggregate(
         self,
-        agg_class,
+        agg_class: type,
         field: str,
         result_key: str,
         *,
         using: str | None = None,
         client: SupportsExecute | None = None,
-    ):
+    ) -> Any:
         """Execute an aggregate query and return the result."""
         exec_client = await _resolve_execution_client(using, client)
 
@@ -277,7 +277,7 @@ class AggregationMixin:
         *,
         using: str | None = None,
         client: SupportsExecute | None = None,
-    ):
+    ) -> Any:
         """Calculate sum of field values."""
         return await self._aggregate(Sum, field, "_sum", using=using, client=client)
 
@@ -287,7 +287,7 @@ class AggregationMixin:
         *,
         using: str | None = None,
         client: SupportsExecute | None = None,
-    ):
+    ) -> Any:
         """Calculate average of field values."""
         return await self._aggregate(Avg, field, "_avg", using=using, client=client)
 
@@ -297,7 +297,7 @@ class AggregationMixin:
         *,
         using: str | None = None,
         client: SupportsExecute | None = None,
-    ):
+    ) -> Any:
         """Get maximum field value."""
         return await self._aggregate(Max, field, "_max", using=using, client=client)
 
@@ -307,7 +307,7 @@ class AggregationMixin:
         *,
         using: str | None = None,
         client: SupportsExecute | None = None,
-    ):
+    ) -> Any:
         """Get minimum field value."""
         return await self._aggregate(Min, field, "_min", using=using, client=client)
 

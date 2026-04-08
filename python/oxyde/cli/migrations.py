@@ -337,7 +337,7 @@ def showmigrations(
     typer.echo("📋 Migrations status:")
     typer.echo()
 
-    async def run_show():
+    async def run_show() -> set[str]:
         # Initialize database connection
         await init_databases({db_alias: config.databases[db_alias]})
 

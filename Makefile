@@ -1,4 +1,4 @@
-.PHONY: test test-unit test-integration test-smoke coverage lint format
+.PHONY: test test-unit test-integration test-smoke coverage lint format build-core mypy
 
 PYTHON_DIR = python
 TEST_DIR = $(PYTHON_DIR)/oxyde/tests
@@ -24,3 +24,9 @@ lint:
 
 format:
 	cd $(PYTHON_DIR) && ruff format .
+
+build-core:
+	cd crates/oxyde-core-py && maturin develop --release
+
+mypy:
+	python -m mypy $(PYTHON_DIR)/oxyde/ --exclude 'tests/' --config-file $(PYTHON_DIR)/pyproject.toml

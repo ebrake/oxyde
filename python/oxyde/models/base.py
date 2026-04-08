@@ -112,7 +112,8 @@ def _get_pk_field_name(model_cls: type) -> str:
     """
     # Use cached PK if available (model is finalized)
     if hasattr(model_cls, "_db_meta") and model_cls._db_meta.pk_field:
-        return model_cls._db_meta.pk_field
+        pk: str = model_cls._db_meta.pk_field
+        return pk
 
     # Fallback: check model_fields directly for db_pk=True
     if hasattr(model_cls, "model_fields"):
@@ -120,7 +121,8 @@ def _get_pk_field_name(model_cls: type) -> str:
             if isinstance(field_info, OxydeFieldInfo) and getattr(
                 field_info, "db_pk", False
             ):
-                return field_name
+                name: str = field_name
+                return name
 
     return "id"
 

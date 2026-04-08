@@ -118,7 +118,8 @@ class InsertQuery:
         """Execute insert query."""
         ir = self.to_ir()
         result_bytes = await client.execute(ir)
-        return msgpack.unpackb(result_bytes, raw=False)
+        result: dict[str, Any] = msgpack.unpackb(result_bytes, raw=False)
+        return result
 
 
 __all__ = ["InsertQuery"]

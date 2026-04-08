@@ -112,7 +112,8 @@ class MutationMixin:
         )
         result_bytes = await exec_client.execute(update_ir)
         result = msgpack.unpackb(result_bytes, raw=False)
-        return result.get("affected", 0)
+        affected: int = result.get("affected", 0)
+        return affected
 
     @overload
     async def update(
@@ -186,7 +187,8 @@ class MutationMixin:
         result = msgpack.unpackb(result_bytes, raw=False)
         if returning:
             return _decode_returning_models(self.model_class, result)
-        return result.get("affected", 0)
+        affected: int = result.get("affected", 0)
+        return affected
 
     async def _mysql_update_returning(
         self,
@@ -295,7 +297,8 @@ class MutationMixin:
         )
         result_bytes = await exec_client.execute(delete_ir)
         result = msgpack.unpackb(result_bytes, raw=False)
-        return result.get("affected", 0)
+        affected: int = result.get("affected", 0)
+        return affected
 
     def _primary_key_field(self) -> str | None:
         """Get primary key field name."""

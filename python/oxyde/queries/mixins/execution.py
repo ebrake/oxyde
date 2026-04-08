@@ -176,7 +176,7 @@ class ExecutionMixin:
             rows = [dict(zip(columns, row)) for row in main_rows]
             del main_rows, data
 
-            models = adapter.validate_python(rows)
+            models: list[Model] = adapter.validate_python(rows)
             del rows
             self._hydrate_from_dedup(models, relations_map)
         elif (
@@ -464,7 +464,8 @@ class ExecutionMixin:
             current = getattr(current, segment, None)
             if current is None:
                 return None
-        return current
+        parent: Model = current
+        return parent
 
     # --- Prefetch methods ---
 
