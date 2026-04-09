@@ -284,7 +284,7 @@ async def test_async_manager_all_modes() -> None:
         class Meta:
             is_table = True
 
-    payload = [{"id": 1, "email": "foo@example.com"}]
+    payload = (["id", "email"], [[1, "foo@example.com"]])
     stub = StubExecuteClient([payload, payload, payload])
 
     models = await Customer.objects.all(client=stub)
@@ -292,7 +292,7 @@ async def test_async_manager_all_modes() -> None:
     assert isinstance(models[0], Customer)
 
     rows = await Customer.objects.all(client=stub, mode="dict")
-    assert rows == payload
+    assert rows == [{"id": 1, "email": "foo@example.com"}]
 
     raw = await Customer.objects.all(client=stub, mode="msgpack")
     assert raw == msgpack.packb(payload)
@@ -311,20 +311,20 @@ async def test_async_manager_get_variants() -> None:
         class Meta:
             is_table = True
 
-    stub_ok = StubExecuteClient([[{"id": 1, "title": "Hello"}]])
+    stub_ok = StubExecuteClient([(["id", "title"], [[1, "Hello"]])])
     article = await Article.objects.get(client=stub_ok, title="Hello")
     assert isinstance(article, Article)
     assert article.title == "Hello"
 
-    stub_none = StubExecuteClient([[]])
+    stub_none = StubExecuteClient([([], [])])
     with pytest.raises(NotFoundError):
         await Article.objects.get(client=stub_none, title="missing")
 
-    stub_multi = StubExecuteClient([[{"id": 1, "title": "A"}, {"id": 2, "title": "B"}]])
+    stub_multi = StubExecuteClient([(["id", "title"], [[1, "A"], [2, "B"]])])
     with pytest.raises(MultipleObjectsReturned):
         await Article.objects.get(client=stub_multi, title__icontains="a")
 
-    stub_optional = StubExecuteClient([[]])
+    stub_optional = StubExecuteClient([([], [])])
     assert (
         await Article.objects.get_or_none(client=stub_optional, title="missing") is None
     )
@@ -343,9 +343,9 @@ async def test_async_manager_first_last_and_count() -> None:
         class Meta:
             is_table = True
 
-    first_payload = [{"id": 1, "created_at": datetime.now(timezone.utc).isoformat()}]
-    last_payload = [{"id": 5, "created_at": datetime.now(timezone.utc).isoformat()}]
-    count_payload = [{"_count": 2}]
+    first_payload = (["id", "created_at"], [[1, datetime.now(timezone.utc).isoformat()]])
+    last_payload = (["id", "created_at"], [[5, datetime.now(timezone.utc).isoformat()]])
+    count_payload = (["_count"], [[2]])
 
     stub = StubExecuteClient([first_payload, last_payload])
 
@@ -465,15 +465,15 @@ async def test_values_list_execution_returns_expected_shapes() -> None:
         class Meta:
             is_table = True
 
-    stub_flat = StubExecuteClient([[{"id": 1}, {"id": 2}]])
+    stub_flat = StubExecuteClient([(["id"], [[1], [2]])])
     flat_result = await Sample.objects.values_list("id", flat=True).fetch_all(stub_flat)
     assert flat_result == [1, 2]
 
-    stub_dict = StubExecuteClient([[{"id": 1, "email": "a"}, {"id": 2, "email": "b"}]])
+    stub_dict = StubExecuteClient([(["id", "email"], [[1, "a"], [2, "b"]])])
     dict_result = await Sample.objects.values("id", "email").fetch_all(stub_dict)
     assert dict_result == [{"id": 1, "email": "a"}, {"id": 2, "email": "b"}]
 
-    stub_tuple = StubExecuteClient([[{"id": 1, "email": "a"}]])
+    stub_tuple = StubExecuteClient([(["id", "email"], [[1, "a"]])])
     tuple_result = await Sample.objects.values_list("id", "email").fetch_all(stub_tuple)
     assert tuple_result == [(1, "a")]
 
@@ -685,12 +685,12 @@ async def test_async_manager_bulk_create_and_get_or_create() -> None:
     assert bulk_stub.calls[0]["op"] == "insert"
     # bulk_create uses single INSERT with multiple VALUES, so only one call
 
-    get_stub = StubExecuteClient([[{"id": 1, "value": "a"}]])
+    get_stub = StubExecuteClient([(["id", "value"], [[1, "a"]])])
     obj, created_flag = await Entry.objects.get_or_create(client=get_stub, id=1)
     assert created_flag is False
     assert isinstance(obj, Entry)
 
-    gor_stub = StubExecuteClient([[], {"affected": 1, "inserted_ids": [3]}])
+    gor_stub = StubExecuteClient([([], []), {"affected": 1, "inserted_ids": [3]}])
     obj2, created_flag2 = await Entry.objects.get_or_create(
         client=gor_stub,
         defaults={"value": "c"},
@@ -715,7 +715,7 @@ async def test_async_manager_update_or_create() -> None:
         class Meta:
             is_table = True
 
-    stub = StubExecuteClient([[], {"affected": 1, "inserted_ids": [1]}])
+    stub = StubExecuteClient([([], []), {"affected": 1, "inserted_ids": [1]}])
     obj, created = await Thing.objects.update_or_create(
         client=stub,
         defaults={"value": "created"},
@@ -842,7 +842,7 @@ def test_query_select_requires_non_empty_column_list() -> None:
 @pytest.mark.asyncio
 async def test_query_all_executes_models() -> None:
     """Test that query.all() returns model instances."""
-    payload = [{"id": 1, "email": "ada@example.com", "is_active": True}]
+    payload = (["id", "email", "is_active"], [[1, "ada@example.com", True]])
     stub = StubExecuteClient([payload])
     users = await User.objects.all(client=stub)
     assert len(users) == 1
@@ -852,7 +852,7 @@ async def test_query_all_executes_models() -> None:
 @pytest.mark.asyncio
 async def test_query_all_respects_values_mode() -> None:
     """Test that values_list with flat=True returns list of values."""
-    payload = [{"email": "ada@example.com"}]
+    payload = (["email"], [["ada@example.com"]])
     stub = StubExecuteClient([payload])
     emails = await User.objects.values_list("email", flat=True).all(client=stub)
     assert emails == ["ada@example.com"]
@@ -861,7 +861,7 @@ async def test_query_all_respects_values_mode() -> None:
 @pytest.mark.asyncio
 async def test_query_all_conflicting_execution_args() -> None:
     """Test that providing both client and using raises error."""
-    stub = StubExecuteClient([[]])
+    stub = StubExecuteClient([([], [])])
     with pytest.raises(ManagerError):
         await User.objects.all(client=stub, using="default")
 

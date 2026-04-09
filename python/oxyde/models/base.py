@@ -139,7 +139,7 @@ class OxydeModelMeta(ModelMetaclass):
                 if value.default is PydanticUndefined and value.default_factory is None:
                     value.default_factory = list
 
-        cls = super().__new__(mcs, name, bases, namespace, **kwargs)
+        cls: type[Model] = super().__new__(mcs, name, bases, namespace, **kwargs)
 
         # Detect FK fields from Pydantic's processed model_fields
         # This works on all Python versions (3.10-3.14+) because Pydantic
@@ -166,7 +166,7 @@ class OxydeModelMeta(ModelMetaclass):
         return cls
 
     def __getattr__(cls, item: str) -> Any:
-        return super().__getattr__(item)
+        return super().__getattr__(item)  # type: ignore[misc]
 
 
 def _build_globalns(cls: type) -> dict[str, Any]:
@@ -203,6 +203,8 @@ class Model(BaseModel, metaclass=OxydeModelMeta):
     _db_meta: ClassVar[ModelMeta]
     objects: ClassVar[QueryManager]
     _is_table: ClassVar[bool] = False
+    __pending_fk_fields__: ClassVar[list[tuple[str, Any, Any]]] = []
+    __fk_fields_resolved__: ClassVar[bool] = False
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
@@ -346,7 +348,7 @@ class Model(BaseModel, metaclass=OxydeModelMeta):
             cls.__fk_fields_resolved__ = False
             return
 
-        fields_to_add: list[tuple[str, type, FieldInfo]] = []
+        fields_to_add: list[tuple[str, Any, FieldInfo]] = []
 
         for field_name, _annotation, field_info in pending_fk:
             # Get resolved type hint
@@ -729,7 +731,7 @@ class Model(BaseModel, metaclass=OxydeModelMeta):
                 )
                 return self
 
-            rows = await manager.filter(**{pk_field: pk_value}).update(
+            rows = await manager.filter(**{pk_field: pk_value}).update(  # type: ignore[misc]
                 returning=True, client=client, using=using, **values
             )
             if not rows:

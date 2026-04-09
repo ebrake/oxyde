@@ -16,6 +16,18 @@ repos:
         files: ^python/oxyde/
         exclude: ^python/oxyde/tests/
 
+  # mypy type checking
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        entry: mypy python/oxyde --config-file python/pyproject.toml
+        language: system
+        files: ^python/oxyde/
+        exclude: ^python/oxyde/tests/
+        types: [python]
+        pass_filenames: false
+
   # Rust formatting
   - repo: local
     hooks:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Coroutine
 from typing import TYPE_CHECKING, Any
 
 import msgpack
@@ -82,7 +83,7 @@ class DebugMixin:
         client: SupportsExecute | None = None,
         analyze: bool = False,
         format: str = "text",
-    ):
+    ) -> Coroutine[Any, Any, str]:
         """
         Get query execution plan from the database.
 
@@ -100,7 +101,7 @@ class DebugMixin:
             plan = await User.objects.filter(age__gte=18).explain(analyze=True)
         """
 
-        async def runner():
+        async def runner() -> str:
             # Resolve pool name from using/client
             pool_name = _resolve_pool_name(using, client)
 
@@ -108,7 +109,7 @@ class DebugMixin:
             ir_bytes = msgpack.packb(query_ir, default=_msgpack_encoder)
 
             # Call Rust explain function
-            plan = await explain_query(
+            plan: str = await explain_query(
                 pool_name, ir_bytes, analyze=analyze, format=format
             )
             return plan

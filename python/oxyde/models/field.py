@@ -57,7 +57,7 @@ from typing import Any, Literal
 from pydantic.fields import FieldInfo, PydanticUndefined
 
 
-class OxydeFieldInfo(FieldInfo):
+class OxydeFieldInfo(FieldInfo):  # type: ignore[misc]
     """Extended FieldInfo with type-safe database metadata.
 
     This class extends Pydantic's FieldInfo to add database-specific metadata

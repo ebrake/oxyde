@@ -194,7 +194,7 @@ def migrate(
         )
         typer.echo()
 
-    async def run_migrate():
+    async def run_migrate() -> tuple[str | None, list]:
         from oxyde.migrations import get_migration_files, rollback_migrations
 
         # Initialize database connection

@@ -271,7 +271,7 @@ class TestManagerAggregates:
     async def test_manager_count(self):
         """Test manager.count() method."""
         # count() expects aggregate result with _count field
-        stub = StubExecuteClient([[{"_count": 3}]])
+        stub = StubExecuteClient([(["_count"], [[3]])])
 
         count = await Product.objects.count(client=stub)
 
@@ -280,7 +280,7 @@ class TestManagerAggregates:
     @pytest.mark.asyncio
     async def test_manager_sum(self):
         """Test manager.sum() method."""
-        stub = StubExecuteClient([[{"__sum__": 150.0}]])
+        stub = StubExecuteClient([(["__sum__"], [[150.0]])])
 
         total = await Product.objects.sum("price", client=stub)
 
@@ -290,7 +290,7 @@ class TestManagerAggregates:
     @pytest.mark.asyncio
     async def test_manager_avg(self):
         """Test manager.avg() method."""
-        stub = StubExecuteClient([[{"__avg__": 4.5}]])
+        stub = StubExecuteClient([(["__avg__"], [[4.5]])])
 
         avg = await Product.objects.avg("rating", client=stub)
 
@@ -299,7 +299,7 @@ class TestManagerAggregates:
     @pytest.mark.asyncio
     async def test_manager_max(self):
         """Test manager.max() method."""
-        stub = StubExecuteClient([[{"__max__": 99.99}]])
+        stub = StubExecuteClient([(["__max__"], [[99.99]])])
 
         max_val = await Product.objects.max("price", client=stub)
 
@@ -308,7 +308,7 @@ class TestManagerAggregates:
     @pytest.mark.asyncio
     async def test_manager_min(self):
         """Test manager.min() method."""
-        stub = StubExecuteClient([[{"__min__": 0.99}]])
+        stub = StubExecuteClient([(["__min__"], [[0.99]])])
 
         min_val = await Product.objects.min("price", client=stub)
 

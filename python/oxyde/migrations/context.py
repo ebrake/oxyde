@@ -194,7 +194,7 @@ class MigrationContext:
         """
         # For collect mode, store simple format
         if self._mode == "collect":
-            op = {
+            op: dict[str, Any] = {
                 "type": "alter_column",
                 "table": table,
                 "column": field_name,
@@ -206,7 +206,7 @@ class MigrationContext:
         # For execute mode, build Rust-compatible format with old_field/new_field
         old_field = None
         table_fields = None
-        table_indexes = None
+        table_indexes: list[dict[str, Any]] = []
 
         if self._schema_state:
             table_schema = self._schema_state.tables.get(table)

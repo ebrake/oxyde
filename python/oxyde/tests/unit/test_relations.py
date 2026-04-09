@@ -504,8 +504,8 @@ class TestPrefetchRelations:
             class Meta:
                 is_table = True
 
-        base_rows = [[{"id": 1, "title": "Task 1"}]]
-        note_rows = [[{"id": 1, "task_id": 1, "text": "Note 1"}]]
+        base_rows = [(["id", "title"], [[1, "Task 1"]])]
+        note_rows = [(["id", "task_id", "text"], [[1, 1, "Note 1"]])]
 
         stub = StubExecuteClient(base_rows + note_rows)
         tasks = await Task.objects.prefetch("notes").fetch_models(stub)
@@ -728,19 +728,13 @@ class TestM2MPrefetchExecution:
         registered_tables()
 
         # Responses: 1) main posts, 2) through table links, 3) target tags
-        post_rows = [[{"id": 1, "title": "Post 1"}]]
+        post_rows = [(["id", "title"], [[1, "Post 1"]])]
         # Through table returns FK column values (post_id, tag_id)
         link_rows = [
-            [
-                {"id": 1, "post_id": 1, "tag_id": 10},
-                {"id": 2, "post_id": 1, "tag_id": 20},
-            ]
+            (["id", "post_id", "tag_id"], [[1, 1, 10], [2, 1, 20]])
         ]
         tag_rows = [
-            [
-                {"id": 10, "name": "python"},
-                {"id": 20, "name": "rust"},
-            ]
+            (["id", "name"], [[10, "python"], [20, "rust"]])
         ]
 
         stub = StubExecuteClient(post_rows + link_rows + tag_rows)

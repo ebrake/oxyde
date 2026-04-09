@@ -1,4 +1,4 @@
-.PHONY: test test-unit test-integration test-smoke coverage lint format build-core mypy
+.PHONY: test test-unit test-integration test-smoke coverage lint format build-core
 
 PYTHON_DIR = python
 TEST_DIR = $(PYTHON_DIR)/oxyde/tests
@@ -20,13 +20,10 @@ coverage:
 	pytest $(TEST_DIR) --cov=$(COV_PKG) --cov-report=term-missing
 
 lint:
-	cd $(PYTHON_DIR) && ruff check .
+	pre-commit run --all-files
 
 format:
 	cd $(PYTHON_DIR) && ruff format .
 
 build-core:
 	cd crates/oxyde-core-py && maturin develop --release
-
-mypy:
-	python -m mypy $(PYTHON_DIR)/oxyde/ --exclude 'tests/' --config-file $(PYTHON_DIR)/pyproject.toml

@@ -22,7 +22,7 @@ Example:
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Coroutine, Iterable
 from typing import TYPE_CHECKING, Any
 
 from oxyde.exceptions import IntegrityError, ManagerError, NotFoundError
@@ -113,7 +113,7 @@ class QueryManager:
         using: str | None = None,
         client: SupportsExecute | None = None,
         mode: str = "models",
-    ):
+    ) -> Coroutine[Any, Any, bytes | list[Any]]:
         """Execute query and return all results.
 
         Args:

@@ -7,6 +7,7 @@ Model.model_config - no sanitization needed.
 
 from __future__ import annotations
 
+from collections.abc import Coroutine
 from typing import TYPE_CHECKING, Any
 
 import msgpack
@@ -74,28 +75,14 @@ class ExecutionMixin:
         """Must be implemented by JoiningMixin."""
         raise NotImplementedError
 
-    async def fetch_all(self, client: SupportsExecute) -> list[dict[str, Any]]:
+    async def fetch_all(self, client: SupportsExecute) -> list[Any]:
         """Execute query and return all results as dicts."""
         result_bytes = await self.fetch_msgpack(client)
         data = msgpack.unpackb(result_bytes, raw=False)
 
-        # Handle columnar format: (columns, rows) tuple from Rust
-        # This is more memory-efficient than list of dicts
-        if isinstance(data, (list, tuple)) and len(data) == 2:
-            first, second = data
-            if isinstance(first, list) and all(isinstance(c, str) for c in first):
-                # Columnar format: first is column names, second is rows
-                # Remap db_columns → field_names
-                columns = _remap_columns(first, self.model_class)
-                row_values = second
-                # Convert to dicts via zip (fast C implementation)
-                rows = [dict(zip(columns, row)) for row in row_values]
-            else:
-                # Old format: list of dicts
-                rows = data
-        else:
-            # Old format or empty
-            rows = data if isinstance(data, list) else []
+        # Columnar format from Rust: [columns, rows]
+        columns = _remap_columns(data[0], self.model_class)
+        rows = [dict(zip(columns, row)) for row in data[1]]
 
         if self._result_mode == "dict":
             return rows
@@ -156,7 +143,7 @@ class ExecutionMixin:
         if model_class not in _TYPE_ADAPTER_CACHE:
             with _TYPE_ADAPTER_LOCK:
                 if model_class not in _TYPE_ADAPTER_CACHE:
-                    _TYPE_ADAPTER_CACHE[model_class] = TypeAdapter(list[model_class])
+                    _TYPE_ADAPTER_CACHE[model_class] = TypeAdapter(list[model_class])  # type: ignore[valid-type]
 
         adapter = _TYPE_ADAPTER_CACHE[model_class]
 
@@ -208,7 +195,7 @@ class ExecutionMixin:
         *,
         using: str | None = None,
         client: SupportsExecute | None = None,
-    ):
+    ) -> Coroutine[Any, Any, bytes | list[Any]]:
         """Execute query and return results as Pydantic models.
 
         Args:
@@ -382,10 +369,10 @@ class ExecutionMixin:
         *,
         using: str | None,
         client: SupportsExecute | None,
-    ):
+    ) -> Coroutine[Any, Any, bytes | list[Any]]:
         """Internal execution dispatcher."""
 
-        async def runner():
+        async def runner() -> bytes | list[Any]:
             exec_client = await _resolve_execution_client(using, client)
             if self._result_mode == "msgpack":
                 return await self.fetch_msgpack(exec_client)
@@ -548,7 +535,9 @@ class ExecutionMixin:
 
             # Use Manager.filter() with __in lookup
             filter_kwargs = {f"{fk_column}__in": unique_ids}
-            children = await target_model.objects.filter(**filter_kwargs).all(
+            children: list[Model] = await target_model.objects.filter(
+                **filter_kwargs
+            ).all(  # type: ignore[assignment]
                 client=client
             )
             for child in children:
@@ -562,7 +551,7 @@ class ExecutionMixin:
         for parent in parents:
             parent_id = getattr(parent, parent_pk.name, None)
             values = grouped.get(parent_id, [])
-            if hasattr(descriptor, "__set__"):
+            if descriptor is not None and hasattr(descriptor, "__set__"):
                 descriptor.__set__(parent, list(values))
             else:
                 parent.__dict__[relation_name] = list(values)
@@ -663,7 +652,9 @@ class ExecutionMixin:
         targets_by_pk: dict[Any, Model] = {}
         if target_ids:
             filter_kwargs = {f"{target_pk.name}__in": target_ids}
-            targets = await target_model.objects.filter(**filter_kwargs).all(
+            targets: list[Model] = await target_model.objects.filter(
+                **filter_kwargs
+            ).all(  # type: ignore[assignment]
                 client=client
             )
             for target in targets:
@@ -683,7 +674,7 @@ class ExecutionMixin:
         for parent in parents:
             parent_id = getattr(parent, parent_pk.name, None)
             values = grouped.get(parent_id, [])
-            if hasattr(descriptor, "__set__"):
+            if descriptor is not None and hasattr(descriptor, "__set__"):
                 descriptor.__set__(parent, list(values))
             else:
                 parent.__dict__[relation_name] = list(values)

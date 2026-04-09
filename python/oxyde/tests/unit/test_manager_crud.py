@@ -379,15 +379,10 @@ class TestManagerGetOrCreate:
         """Test get_or_create() finds existing record."""
         stub = StubExecuteClient(
             [
-                [
-                    {
-                        "id": 1,
-                        "name": "Existing",
-                        "email": None,
-                        "age": 25,
-                        "is_active": True,
-                    }
-                ]
+                (
+                    ["id", "name", "email", "age", "is_active"],
+                    [[1, "Existing", None, 25, True]],
+                )
             ]
         )
 
@@ -420,7 +415,7 @@ class TestManagerGetOrCreate:
     @pytest.mark.asyncio
     async def test_get_or_create_uses_defaults(self):
         """Test get_or_create() uses defaults for new record."""
-        stub = StubExecuteClient([[], {"affected": 1, "inserted_ids": [1]}])
+        stub = StubExecuteClient([([], []), {"affected": 1, "inserted_ids": [1]}])
 
         obj, created = await OxydeTestModel.objects.get_or_create(
             client=stub,
@@ -441,7 +436,7 @@ class TestManagerGet:
     async def test_get_finds_single_record(self):
         """Test get() finds single matching record."""
         stub = StubExecuteClient(
-            [[{"id": 1, "name": "Found", "email": None, "age": 25, "is_active": True}]]
+            [(["id", "name", "email", "age", "is_active"], [[1, "Found", None, 25, True]])]
         )
 
         obj = await OxydeTestModel.objects.get(client=stub, name="Found")
@@ -452,7 +447,7 @@ class TestManagerGet:
     @pytest.mark.asyncio
     async def test_get_not_found_raises(self):
         """Test get() raises NotFoundError when no match."""
-        stub = StubExecuteClient([[]])
+        stub = StubExecuteClient([([], [])])
 
         with pytest.raises(NotFoundError):
             await OxydeTestModel.objects.get(client=stub, name="Missing")
@@ -492,7 +487,7 @@ class TestManagerGetOrNone:
     async def test_get_or_none_finds_record(self):
         """Test get_or_none() finds matching record."""
         stub = StubExecuteClient(
-            [[{"id": 1, "name": "Found", "email": None, "age": 25, "is_active": True}]]
+            [(["id", "name", "email", "age", "is_active"], [[1, "Found", None, 25, True]])]
         )
 
         obj = await OxydeTestModel.objects.get_or_none(client=stub, name="Found")
@@ -503,7 +498,7 @@ class TestManagerGetOrNone:
     @pytest.mark.asyncio
     async def test_get_or_none_returns_none_when_not_found(self):
         """Test get_or_none() returns None when no match."""
-        stub = StubExecuteClient([[]])
+        stub = StubExecuteClient([([], [])])
 
         obj = await OxydeTestModel.objects.get_or_none(client=stub, name="Missing")
 
@@ -561,7 +556,7 @@ class TestManagerFirstLast:
     @pytest.mark.asyncio
     async def test_first_returns_none_when_empty(self):
         """Test first() returns None when no records."""
-        stub = StubExecuteClient([[]])
+        stub = StubExecuteClient([([], [])])
 
         obj = await OxydeTestModel.objects.first(client=stub)
 
