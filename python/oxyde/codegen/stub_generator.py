@@ -541,6 +541,17 @@ class {model_name}Manager(QueryManager[{model_name}]):
         \"\"\"Get object or create if not found. Returns (object, created).\"\"\"
         ...
 
+    async def update_or_create(
+        self,
+        *,
+        defaults: dict[str, Any] | None = None,
+        client: Any | None = None,
+        using: str | None = None,
+        **filters: Any,
+    ) -> tuple[{model_name}, bool]:
+        \"\"\"Get object, create if missing, or update it when defaults are provided.\"\"\"
+        ...
+
     async def all(
         self,
         *,

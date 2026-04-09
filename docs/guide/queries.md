@@ -260,6 +260,24 @@ else:
     print("Found existing user")
 ```
 
+#### update_or_create()
+
+Get existing, update it, or create new:
+
+```python
+user, created = await User.objects.update_or_create(
+    email="alice@example.com",
+    defaults={"name": "Alice", "age": 31},
+)
+
+if created:
+    print("Created new user")
+else:
+    print("Updated existing user")
+```
+
+Uses the normal ORM create/save path, including aliased fields and save hooks.
+
 ### Updating Records
 
 #### update()

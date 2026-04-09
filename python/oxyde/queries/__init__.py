@@ -17,6 +17,8 @@ Execution Methods:
     - first(), last(): Get single object
     - get(): Get exactly one object (raises if not found)
     - get_or_none(): Get one or None
+    - get_or_create(): Get existing object or create a new one
+    - update_or_create(): Get existing object and update it, or create a new one
     - count(), exists(): Aggregate queries
     - create(), bulk_create(): Insert objects
     - update(), delete(): Modify/remove objects

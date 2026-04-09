@@ -705,6 +705,31 @@ async def test_async_manager_bulk_create_and_get_or_create() -> None:
 
 
 @pytest.mark.asyncio
+async def test_async_manager_update_or_create() -> None:
+    clear_registry()
+
+    class Thing(Model):
+        id: int | None = Field(default=None, db_pk=True)
+        value: str
+
+        class Meta:
+            is_table = True
+
+    stub = StubExecuteClient([[], {"affected": 1, "inserted_ids": [1]}])
+    obj, created = await Thing.objects.update_or_create(
+        client=stub,
+        defaults={"value": "created"},
+        id=1,
+    )
+    assert created is True
+    assert isinstance(obj, Thing)
+    assert stub.calls[0]["op"] == "select"
+    assert stub.calls[1]["op"] == "insert"
+
+    clear_registry()
+
+
+@pytest.mark.asyncio
 async def test_async_manager_upsert_placeholder() -> None:
     clear_registry()
 

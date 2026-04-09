@@ -8,6 +8,7 @@ from pydantic import computed_field
 from oxyde import Field, Model
 from oxyde.exceptions import (
     FieldError,
+    IntegrityError,
     ManagerError,
     MultipleObjectsReturned,
     NotFoundError,
@@ -34,10 +35,14 @@ class TestModelSave:
     @pytest.mark.asyncio
     async def test_save_new_instance_creates(self):
         """Test save() on new instance (no PK) creates record."""
-        stub = StubExecuteClient([{
-            "columns": ["id", "name", "email", "age", "is_active"],
-            "rows": [[42, "Alice", None, 25, True]]
-        }])
+        stub = StubExecuteClient(
+            [
+                {
+                    "columns": ["id", "name", "email", "age", "is_active"],
+                    "rows": [[42, "Alice", None, 25, True]],
+                }
+            ]
+        )
 
         instance = OxydeTestModel(name="Alice", age=25)
         result = await instance.save(client=stub)
@@ -49,10 +54,14 @@ class TestModelSave:
     @pytest.mark.asyncio
     async def test_save_existing_instance_updates(self):
         """Test save() on existing instance (with PK) updates record."""
-        stub = StubExecuteClient([{
-            "columns": ["id", "name", "email", "age", "is_active"],
-            "rows": [[1, "Bob", None, 30, True]]
-        }])
+        stub = StubExecuteClient(
+            [
+                {
+                    "columns": ["id", "name", "email", "age", "is_active"],
+                    "rows": [[1, "Bob", None, 30, True]],
+                }
+            ]
+        )
 
         instance = OxydeTestModel(id=1, name="Bob", age=30)
         result = await instance.save(client=stub)
@@ -63,10 +72,14 @@ class TestModelSave:
     @pytest.mark.asyncio
     async def test_save_with_update_fields(self):
         """Test save() with update_fields updates only specified fields."""
-        stub = StubExecuteClient([{
-            "columns": ["id", "name", "email", "age", "is_active"],
-            "rows": [[1, "Charlie", "c@example.com", 35, True]]
-        }])
+        stub = StubExecuteClient(
+            [
+                {
+                    "columns": ["id", "name", "email", "age", "is_active"],
+                    "rows": [[1, "Charlie", "c@example.com", 35, True]],
+                }
+            ]
+        )
 
         instance = OxydeTestModel(id=1, name="Charlie", email="c@example.com", age=35)
         await instance.save(client=stub, update_fields=["name", "age"])
@@ -107,10 +120,14 @@ class TestModelSave:
             class Meta:
                 is_table = True
 
-        stub = StubExecuteClient([{
-            "columns": ["id", "title", "author_id"],
-            "rows": [[1, "Hello", 5]],
-        }])
+        stub = StubExecuteClient(
+            [
+                {
+                    "columns": ["id", "title", "author_id"],
+                    "rows": [[1, "Hello", 5]],
+                }
+            ]
+        )
         post = _Post(id=1, title="Hello", author_id=5)
         await post.save(client=stub, update_fields=["author"])
 
@@ -140,9 +157,11 @@ class TestModelSave:
     @pytest.mark.asyncio
     async def test_save_update_not_found_raises(self):
         """Test save() raises NotFoundError when record not found."""
-        stub = StubExecuteClient([
-            {"affected": 0, "columns": [], "rows": []},
-        ])
+        stub = StubExecuteClient(
+            [
+                {"affected": 0, "columns": [], "rows": []},
+            ]
+        )
 
         instance = OxydeTestModel(id=999, name="Ghost")
 
@@ -231,7 +250,9 @@ class TestManagerCreate:
         """Test create() with keyword arguments."""
         stub = StubExecuteClient([{"affected": 1, "inserted_ids": [1]}])
 
-        instance = await OxydeTestModel.objects.create(client=stub, name="NewUser", age=25)
+        instance = await OxydeTestModel.objects.create(
+            client=stub, name="NewUser", age=25
+        )
 
         assert isinstance(instance, OxydeTestModel)
         assert instance.name == "NewUser"
@@ -497,7 +518,9 @@ class TestManagerDelete:
         """Test delete() through filter."""
         stub = StubExecuteClient([{"affected": 5}])
 
-        affected = await OxydeTestModel.objects.filter(is_active=False).delete(client=stub)
+        affected = await OxydeTestModel.objects.filter(is_active=False).delete(
+            client=stub
+        )
 
         assert affected == 5
         assert stub.calls[0]["op"] == "delete"
@@ -593,9 +616,7 @@ class TestComputedFieldExclusion:
 
         stub = StubExecuteClient([{"affected": 1, "inserted_ids": [1]}])
 
-        instance = await _Product.objects.create(
-            client=stub, price=10.0, quantity=3
-        )
+        instance = await _Product.objects.create(client=stub, price=10.0, quantity=3)
 
         assert instance.total == 30.0
         assert "total" not in stub.calls[0]["values"]
@@ -630,6 +651,200 @@ class TestComputedFieldExclusion:
         for call in stub.calls:
             for row in call.get("bulk_values", []):
                 assert "total" not in row
+
+
+class TestManagerUpdateOrCreate:
+    """Test QueryManager.update_or_create() method."""
+
+    @pytest.mark.asyncio
+    async def test_update_or_create_updates_existing_via_save(self):
+        """update_or_create() updates existing objects through the normal save path."""
+        stub = StubExecuteClient(
+            [
+                [
+                    {
+                        "id": 1,
+                        "name": "Existing",
+                        "email": "existing@example.com",
+                        "age": 25,
+                        "is_active": True,
+                    }
+                ],
+                {
+                    "columns": ["id", "name", "email", "age", "is_active"],
+                    "rows": [[1, "Existing", "existing@example.com", 25, True]],
+                },
+            ]
+        )
+
+        obj, created = await OxydeTestModel.objects.update_or_create(
+            client=stub,
+            defaults={"age": 25},
+            id=1,
+        )
+
+        assert created is False
+        assert isinstance(obj, OxydeTestModel)
+        assert obj.id == 1
+        assert obj.age == 25
+        assert [call["op"] for call in stub.calls] == ["select", "update"]
+        assert stub.calls[1]["values"] == {"age": 25}
+
+    @pytest.mark.asyncio
+    async def test_update_or_create_retries_after_integrity_error(self):
+        """update_or_create() retries with get() after a conflicting create()."""
+
+        class IntegrityRetryStub(StubExecuteClient):
+            async def execute(self, ir):
+                if ir["op"] == "insert":
+                    self.calls.append(ir)
+                    raise IntegrityError("duplicate key value violates unique constraint")
+                return await super().execute(ir)
+
+        stub = IntegrityRetryStub(
+            [
+                [],
+                [
+                    {
+                        "id": 1,
+                        "name": "Recovered",
+                        "email": "existing@example.com",
+                        "age": 25,
+                        "is_active": True,
+                    }
+                ],
+                {
+                    "columns": ["id", "name", "email", "age", "is_active"],
+                    "rows": [[1, "Recovered", "existing@example.com", 30, True]],
+                },
+            ]
+        )
+
+        obj, created = await OxydeTestModel.objects.update_or_create(
+            client=stub,
+            defaults={"name": "Recovered", "age": 30},
+            id=1,
+        )
+
+        assert created is False
+        assert isinstance(obj, OxydeTestModel)
+        assert obj.id == 1
+        assert obj.name == "Recovered"
+        assert obj.age == 30
+        assert [call["op"] for call in stub.calls] == ["select", "insert", "select", "update"]
+        assert stub.calls[3]["values"] == {"name": "Recovered", "age": 30}
+
+    @pytest.mark.asyncio
+    async def test_update_or_create_existing_without_defaults_skips_update(self):
+        """update_or_create() returns existing records unchanged when defaults are omitted."""
+        stub = StubExecuteClient(
+            [
+                [
+                    {
+                        "id": 1,
+                        "name": "Existing",
+                        "email": "existing@example.com",
+                        "age": 25,
+                        "is_active": True,
+                    }
+                ]
+            ]
+        )
+
+        obj, created = await OxydeTestModel.objects.update_or_create(
+            client=stub,
+            id=1,
+        )
+
+        assert created is False
+        assert obj.id == 1
+        assert len(stub.calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_update_or_create_creates_new(self):
+        """update_or_create() creates new record when not found."""
+        stub = StubExecuteClient(
+            [
+                [],  # First query returns empty
+                {"affected": 1, "inserted_ids": [42]},  # Then insert
+            ]
+        )
+
+        obj, created = await OxydeTestModel.objects.update_or_create(
+            client=stub,
+            defaults={"name": "NewUser", "age": 30},
+            id=42,
+        )
+
+        assert created is True
+        assert isinstance(obj, OxydeTestModel)
+        assert obj.id == 42
+        assert obj.name == "NewUser"
+        assert stub.calls[1]["op"] == "insert"
+        assert "on_conflict" not in stub.calls[1]
+
+    @pytest.mark.asyncio
+    async def test_update_or_create_updates_non_unique_lookup(self):
+        """update_or_create() uses the same safe path for non-unique lookups."""
+        stub = StubExecuteClient(
+            [
+                [
+                    {
+                        "id": 1,
+                        "name": "Existing",
+                        "email": "existing@example.com",
+                        "age": 25,
+                        "is_active": True,
+                    }
+                ],
+                {
+                    "columns": ["id", "name", "email", "age", "is_active"],
+                    "rows": [[1, "Existing", "existing@example.com", 30, True]],
+                },
+            ]
+        )
+
+        obj, created = await OxydeTestModel.objects.update_or_create(
+            client=stub,
+            defaults={"age": 30},
+            name="Existing",
+        )
+
+        assert created is False
+        assert obj.age == 30
+        assert [call["op"] for call in stub.calls] == [
+            "select",
+            "update",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_update_or_create_uses_aliased_column_names(self):
+        """update_or_create() keeps aliased fields on the standard save/update path."""
+
+        class AliasedModel(Model):
+            id: int | None = Field(default=None, db_pk=True)
+            title: str = Field(db_column="event_title")
+
+            class Meta:
+                is_table = True
+
+        stub = StubExecuteClient(
+            [
+                [{"id": 1, "title": "Original"}],
+                {"columns": ["id", "event_title"], "rows": [[1, "Updated"]]},
+            ]
+        )
+
+        obj, created = await AliasedModel.objects.update_or_create(
+            client=stub,
+            defaults={"title": "Updated"},
+            id=1,
+        )
+
+        assert created is False
+        assert obj.title == "Updated"
+        assert [call["op"] for call in stub.calls] == ["select", "update"]
+        assert stub.calls[1]["values"] == {"event_title": "Updated"}
 
 
 class TestManagerUpsert:

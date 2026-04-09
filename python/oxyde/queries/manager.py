@@ -315,6 +315,49 @@ class QueryManager:
             client=client,
         )
 
+    async def update_or_create(
+        self,
+        *,
+        defaults: dict[str, Any] | None = None,
+        using: str | None = None,
+        client: SupportsExecute | None = None,
+        **filters: Any,
+    ) -> tuple[Model, bool]:
+        """Get existing object and update it, or create it if it does not exist.
+
+        Args:
+            defaults: Field values to use when creating or updating
+            using: Database alias
+            client: Optional database client
+            **filters: Lookup conditions for finding existing object
+
+        Returns:
+            Tuple of (instance, created) where created is True if a new
+            object was made.
+        """
+        try:
+            obj = await self.get(using=using, client=client, **filters)
+        except NotFoundError:
+            create_data = _derive_create_data(filters, defaults)
+            try:
+                obj = await self.create(using=using, client=client, **create_data)
+                return obj, True
+            except IntegrityError:
+                obj = await self.get(using=using, client=client, **filters)
+
+        if not defaults:
+            return obj, False
+
+        for key, value in defaults.items():
+            setattr(obj, key, value)
+
+        saved_obj = await obj.save(
+            client=client,
+            using=using,
+            update_fields=defaults.keys(),
+        )
+        return saved_obj, False
+
     async def upsert(self, *args: Any, **kwargs: Any) -> Any:
         """Not implemented yet."""
         raise ManagerError("upsert() is not implemented yet")
