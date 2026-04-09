@@ -54,11 +54,13 @@ jobs:
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
 
-      - name: Install mypy
-        run: uv tool install mypy
+      - name: Install Python deps for mypy
+        run: |
+          uv venv
+          uv pip install mypy==1.19.1 pydantic msgpack typing-extensions
 
       - name: Run pre-commit
-        run: uvx pre-commit run --all-files
+        run: uv run pre-commit run --all-files
 
   # Run Rust tests
   test-rust:
