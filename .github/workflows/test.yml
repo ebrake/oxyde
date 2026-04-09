@@ -54,6 +54,9 @@ jobs:
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
 
+      - name: Install mypy
+        run: uv pip install mypy --system
+
       - name: Run pre-commit
         run: uvx pre-commit run --all-files
 
