@@ -55,7 +55,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install mypy
-        run: uv pip install mypy --system
+        run: uv tool install mypy
 
       - name: Run pre-commit
         run: uvx pre-commit run --all-files
