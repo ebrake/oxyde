@@ -164,6 +164,47 @@ settings = PoolSettings(
 )
 ```
 
+### TLS Settings
+
+Configure TLS for PostgreSQL and MySQL connections:
+
+```python
+settings = PoolSettings(
+    # TLS mode (controls both requirement and certificate verification)
+    #   PG:    "disable", "allow", "prefer", "require", "verify-ca", "verify-full"
+    #   MySQL: "disabled", "preferred", "required", "verify-ca", "verify-identity"
+    ssl_mode="require",
+
+    # CA certificate (for verify-ca / verify-full modes)
+    ssl_root_cert="/path/to/ca.pem",
+
+    # Client certificate + key (for mTLS)
+    ssl_client_cert="/path/to/client-cert.pem",
+    ssl_client_key="/path/to/client-key.pem",
+)
+```
+
+!!! note "TLS without certificate verification"
+    Use `ssl_mode="require"` (PG) or `ssl_mode="required"` (MySQL) to encrypt the connection without verifying the server certificate. This is common for managed databases (AWS RDS, Supabase, Neon) that use self-signed certificates.
+
+### PostgreSQL Settings
+
+```python
+settings = PoolSettings(
+    pg_application_name="my-app",       # Visible in pg_stat_activity
+    pg_statement_cache_capacity=200,    # Prepared statement cache size (default: 100)
+)
+```
+
+### MySQL Settings
+
+```python
+settings = PoolSettings(
+    mysql_charset="utf8mb4",            # Character set (default: utf8mb4)
+    mysql_collation="utf8mb4_unicode_ci",
+)
+```
+
 ### SQLite Settings
 
 SQLite-specific PRAGMA settings (applied automatically):

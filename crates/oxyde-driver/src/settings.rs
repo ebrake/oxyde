@@ -18,6 +18,17 @@ pub struct PoolSettings {
     pub sqlite_synchronous: Option<String>,
     pub sqlite_cache_size: Option<i32>,
     pub sqlite_busy_timeout: Option<i32>,
+    // TLS settings (PostgreSQL + MySQL)
+    pub ssl_mode: Option<String>,
+    pub ssl_root_cert: Option<String>,
+    pub ssl_client_cert: Option<String>,
+    pub ssl_client_key: Option<String>,
+    // PostgreSQL-specific
+    pub pg_application_name: Option<String>,
+    pub pg_statement_cache_capacity: Option<u32>,
+    // MySQL-specific
+    pub mysql_charset: Option<String>,
+    pub mysql_collation: Option<String>,
 }
 
 impl Default for PoolSettings {
@@ -35,6 +46,14 @@ impl Default for PoolSettings {
             sqlite_synchronous: None,
             sqlite_cache_size: None,
             sqlite_busy_timeout: None,
+            ssl_mode: None,
+            ssl_root_cert: None,
+            ssl_client_cert: None,
+            ssl_client_key: None,
+            pg_application_name: None,
+            pg_statement_cache_capacity: None,
+            mysql_charset: None,
+            mysql_collation: None,
         }
     }
 }

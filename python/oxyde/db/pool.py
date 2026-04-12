@@ -155,6 +155,23 @@ class PoolSettings:
     )
     sqlite_busy_timeout: int | None = 5000  # Timeout in milliseconds for busy database
 
+    # TLS settings (PostgreSQL + MySQL)
+    # ssl_mode controls both TLS requirement and certificate verification:
+    #   PG:    "disable", "allow", "prefer", "require", "verify-ca", "verify-full"
+    #   MySQL: "disabled", "preferred", "required", "verify-ca", "verify-identity"
+    ssl_mode: str | None = None
+    ssl_root_cert: str | None = None  # Path to CA certificate
+    ssl_client_cert: str | None = None  # Path to client certificate (mTLS)
+    ssl_client_key: str | None = None  # Path to client private key (mTLS)
+
+    # PostgreSQL-specific
+    pg_application_name: str | None = None  # Visible in pg_stat_activity
+    pg_statement_cache_capacity: int | None = None  # Prepared statement cache size
+
+    # MySQL-specific
+    mysql_charset: str | None = None  # Character set (default: utf8mb4)
+    mysql_collation: str | None = None  # Collation
+
     def to_payload(self) -> dict[str, Any] | None:
         payload: dict[str, Any] = {}
 
@@ -188,6 +205,30 @@ class PoolSettings:
             payload["sqlite_cache_size"] = int(self.sqlite_cache_size)
         if self.sqlite_busy_timeout is not None:
             payload["sqlite_busy_timeout"] = int(self.sqlite_busy_timeout)
+
+        # TLS settings
+        if self.ssl_mode is not None:
+            payload["ssl_mode"] = str(self.ssl_mode)
+        if self.ssl_root_cert is not None:
+            payload["ssl_root_cert"] = str(self.ssl_root_cert)
+        if self.ssl_client_cert is not None:
+            payload["ssl_client_cert"] = str(self.ssl_client_cert)
+        if self.ssl_client_key is not None:
+            payload["ssl_client_key"] = str(self.ssl_client_key)
+
+        # PostgreSQL-specific
+        if self.pg_application_name is not None:
+            payload["pg_application_name"] = str(self.pg_application_name)
+        if self.pg_statement_cache_capacity is not None:
+            payload["pg_statement_cache_capacity"] = int(
+                self.pg_statement_cache_capacity
+            )
+
+        # MySQL-specific
+        if self.mysql_charset is not None:
+            payload["mysql_charset"] = str(self.mysql_charset)
+        if self.mysql_collation is not None:
+            payload["mysql_collation"] = str(self.mysql_collation)
 
         return payload or None
 

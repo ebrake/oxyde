@@ -1,10 +1,11 @@
 //! Pool lifecycle API: init, close, query backend.
 
 use sqlx::{
-    mysql::MySqlPoolOptions,
-    postgres::PgPoolOptions,
+    mysql::{MySqlConnectOptions, MySqlPoolOptions, MySqlSslMode},
+    postgres::{PgConnectOptions, PgPoolOptions, PgSslMode},
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
+use std::path::PathBuf;
 use std::str::FromStr;
 use tracing::info;
 
@@ -48,17 +49,19 @@ async fn init_pool_inner(
 
     let pool = match backend {
         DatabaseBackend::Postgres => {
-            let options = apply_common_settings_pg(PgPoolOptions::new(), &settings);
-            options
-                .connect(url)
+            let connect_opts = build_pg_connect_options(url, &settings)?;
+            let pool_opts = apply_common_settings_pg(PgPoolOptions::new(), &settings);
+            pool_opts
+                .connect_with(connect_opts)
                 .await
                 .map(DbPool::Postgres)
                 .map_err(|e| DriverError::ConnectionError(format!("Failed to connect: {}", e)))?
         }
         DatabaseBackend::MySql => {
-            let options = apply_common_settings_mysql(MySqlPoolOptions::new(), &settings);
-            options
-                .connect(url)
+            let connect_opts = build_mysql_connect_options(url, &settings)?;
+            let pool_opts = apply_common_settings_mysql(MySqlPoolOptions::new(), &settings);
+            pool_opts
+                .connect_with(connect_opts)
                 .await
                 .map(DbPool::MySql)
                 .map_err(|e| DriverError::ConnectionError(format!("Failed to connect: {}", e)))?
@@ -219,6 +222,9 @@ fn apply_common_settings_pg(mut options: PgPoolOptions, settings: &PoolSettings)
     if let Some(lifetime) = settings.max_lifetime {
         options = options.max_lifetime(lifetime);
     }
+    if let Some(test_before) = settings.test_before_acquire {
+        options = options.test_before_acquire(test_before);
+    }
     options
 }
 
@@ -266,6 +272,89 @@ fn apply_common_settings_sqlite(
     if let Some(lifetime) = settings.max_lifetime {
         options = options.max_lifetime(lifetime);
     }
-
+    if let Some(test_before) = settings.test_before_acquire {
+        options = options.test_before_acquire(test_before);
+    }
     options
+}
+
+fn build_pg_connect_options(url: &str, settings: &PoolSettings) -> Result<PgConnectOptions> {
+    let mut opts = PgConnectOptions::from_str(url)
+        .map_err(|e| DriverError::ConnectionError(format!("Invalid PostgreSQL URL: {e}")))?;
+
+    if let Some(mode) = &settings.ssl_mode {
+        opts = opts.ssl_mode(parse_pg_ssl_mode(mode)?);
+    }
+    if let Some(path) = &settings.ssl_root_cert {
+        opts = opts.ssl_root_cert(PathBuf::from(path));
+    }
+    if let Some(path) = &settings.ssl_client_cert {
+        opts = opts.ssl_client_cert(PathBuf::from(path));
+    }
+    if let Some(path) = &settings.ssl_client_key {
+        opts = opts.ssl_client_key(PathBuf::from(path));
+    }
+    if let Some(name) = &settings.pg_application_name {
+        opts = opts.application_name(name);
+    }
+    if let Some(cap) = settings.pg_statement_cache_capacity {
+        opts = opts.statement_cache_capacity(cap as usize);
+    }
+
+    Ok(opts)
+}
+
+fn build_mysql_connect_options(url: &str, settings: &PoolSettings) -> Result<MySqlConnectOptions> {
+    let mut opts = MySqlConnectOptions::from_str(url)
+        .map_err(|e| DriverError::ConnectionError(format!("Invalid MySQL URL: {e}")))?;
+
+    if let Some(mode) = &settings.ssl_mode {
+        opts = opts.ssl_mode(parse_mysql_ssl_mode(mode)?);
+    }
+    if let Some(path) = &settings.ssl_root_cert {
+        opts = opts.ssl_ca(PathBuf::from(path));
+    }
+    if let Some(path) = &settings.ssl_client_cert {
+        opts = opts.ssl_client_cert(PathBuf::from(path));
+    }
+    if let Some(path) = &settings.ssl_client_key {
+        opts = opts.ssl_client_key(PathBuf::from(path));
+    }
+    if let Some(charset) = &settings.mysql_charset {
+        opts = opts.charset(charset);
+    }
+    if let Some(collation) = &settings.mysql_collation {
+        opts = opts.collation(collation);
+    }
+
+    Ok(opts)
+}
+
+fn parse_pg_ssl_mode(mode: &str) -> Result<PgSslMode> {
+    match mode.to_lowercase().replace('-', "_").as_str() {
+        "disable" => Ok(PgSslMode::Disable),
+        "allow" => Ok(PgSslMode::Allow),
+        "prefer" => Ok(PgSslMode::Prefer),
+        "require" => Ok(PgSslMode::Require),
+        "verify_ca" => Ok(PgSslMode::VerifyCa),
+        "verify_full" => Ok(PgSslMode::VerifyFull),
+        _ => Err(DriverError::InvalidPoolSettings(format!(
+            "Invalid PostgreSQL SSL mode: '{mode}'. \
+             Expected: disable, allow, prefer, require, verify-ca, verify-full"
+        ))),
+    }
+}
+
+fn parse_mysql_ssl_mode(mode: &str) -> Result<MySqlSslMode> {
+    match mode.to_lowercase().replace('-', "_").as_str() {
+        "disabled" => Ok(MySqlSslMode::Disabled),
+        "preferred" => Ok(MySqlSslMode::Preferred),
+        "required" => Ok(MySqlSslMode::Required),
+        "verify_ca" => Ok(MySqlSslMode::VerifyCa),
+        "verify_identity" => Ok(MySqlSslMode::VerifyIdentity),
+        _ => Err(DriverError::InvalidPoolSettings(format!(
+            "Invalid MySQL SSL mode: '{mode}'. \
+             Expected: disabled, preferred, required, verify-ca, verify-identity"
+        ))),
+    }
 }

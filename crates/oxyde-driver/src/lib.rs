@@ -184,16 +184,8 @@ mod tests {
         PoolSettings {
             max_connections: Some(1),
             min_connections: Some(1),
-            idle_timeout: None,
             acquire_timeout: Some(Duration::from_secs(5)),
-            max_lifetime: None,
-            test_before_acquire: Some(false),
-            transaction_timeout: None,
-            transaction_cleanup_interval: None,
-            sqlite_journal_mode: None,
-            sqlite_synchronous: None,
-            sqlite_cache_size: None,
-            sqlite_busy_timeout: None,
+            ..PoolSettings::default()
         }
     }
 

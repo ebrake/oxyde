@@ -335,6 +335,36 @@ fn parse_pool_dict(dict: &Bound<'_, PyDict>, parsed: &mut DriverPoolSettings) ->
         parsed.sqlite_busy_timeout = extract_optional_i32(&value)?;
     }
 
+    // TLS settings
+    if let Some(value) = dict.get_item("ssl_mode")? {
+        parsed.ssl_mode = extract_optional_string(&value)?;
+    }
+    if let Some(value) = dict.get_item("ssl_root_cert")? {
+        parsed.ssl_root_cert = extract_optional_string(&value)?;
+    }
+    if let Some(value) = dict.get_item("ssl_client_cert")? {
+        parsed.ssl_client_cert = extract_optional_string(&value)?;
+    }
+    if let Some(value) = dict.get_item("ssl_client_key")? {
+        parsed.ssl_client_key = extract_optional_string(&value)?;
+    }
+
+    // PostgreSQL-specific
+    if let Some(value) = dict.get_item("pg_application_name")? {
+        parsed.pg_application_name = extract_optional_string(&value)?;
+    }
+    if let Some(value) = dict.get_item("pg_statement_cache_capacity")? {
+        parsed.pg_statement_cache_capacity = extract_optional_u32(&value)?;
+    }
+
+    // MySQL-specific
+    if let Some(value) = dict.get_item("mysql_charset")? {
+        parsed.mysql_charset = extract_optional_string(&value)?;
+    }
+    if let Some(value) = dict.get_item("mysql_collation")? {
+        parsed.mysql_collation = extract_optional_string(&value)?;
+    }
+
     Ok(())
 }
 
