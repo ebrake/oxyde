@@ -8,6 +8,7 @@ Attributes:
     operator: SQL operator ("=", ">", "LIKE", "IN", "IS NULL", etc.)
     value: Comparison value (can be None for IS NULL)
     column: Database column name (may differ from field if db_column set)
+    escape: Optional LIKE escape character for pattern filters
 
 Operators:
     "="        → Equality
@@ -30,13 +31,15 @@ Creation:
         → Condition("name", "LIKE", "%alice%")
 
 IR Format:
-    to_ir() returns dict for Rust codec:
+    to_ir() returns dict for Rust codec. For a LIKE condition with an
+    escape character:
     {
         "type": "condition",
-        "field": "age",
-        "op": ">=",
-        "value": 18,
-        "column": "age"
+        "field": "name",
+        "op": "LIKE",
+        "value": "A\\_%",
+        "column": "name",
+        "escape": "\\"
     }
 """
 
@@ -53,12 +56,19 @@ class Condition:
     """Represents a filter condition."""
 
     def __init__(
-        self, field: str, operator: str, value: Any, *, column: str | None = None
+        self,
+        field: str,
+        operator: str,
+        value: Any,
+        *,
+        column: str | None = None,
+        escape: str | None = None,
     ):
         self.field = field
         self.operator = operator
         self.value = value
         self.column = column or field
+        self.escape = escape
 
     def to_ir(self) -> FilterNode:
         """Convert to IR format expected by the Rust codec.
@@ -72,6 +82,7 @@ class Condition:
             operator=self.operator,
             value=serialize_value(self.value),
             column=self.column,
+            escape=self.escape,
         )
 
 
