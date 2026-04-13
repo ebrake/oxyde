@@ -49,7 +49,7 @@ class TestIntRoundTrip:
 
     @pytest.mark.asyncio
     async def test_large(self, db):
-        big = 2**53 - 1  # max safe integer for JSON
+        big = 2**31 - 1  # max INTEGER (fits all dialects)
         obj = await AllTypes.objects.create(int_val=big, using=db.name)
         fetched = await AllTypes.objects.get(id=obj.id, using=db.name)
         assert fetched.int_val == big

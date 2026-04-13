@@ -65,7 +65,7 @@ pub(crate) fn python_type_to_sql(python_type: &str, dialect: Dialect, is_pk: boo
             "float" => "DOUBLE PRECISION".to_string(),
             "bool" => "BOOLEAN".to_string(),
             "bytes" => "BYTEA".to_string(),
-            "datetime" => "TIMESTAMPTZ".to_string(),
+            "datetime" => "TIMESTAMP".to_string(),
             "date" => "DATE".to_string(),
             "time" => "TIME".to_string(),
             "timedelta" => "BIGINT".to_string(),
@@ -76,7 +76,7 @@ pub(crate) fn python_type_to_sql(python_type: &str, dialect: Dialect, is_pk: boo
         },
         Dialect::Mysql => match python_type {
             "int" if is_pk => "BIGINT".to_string(),
-            "int" => "INTEGER".to_string(),
+            "int" => "BIGINT".to_string(),
             "str" => "TEXT".to_string(),
             "float" => "DOUBLE".to_string(),
             "bool" => "TINYINT".to_string(),

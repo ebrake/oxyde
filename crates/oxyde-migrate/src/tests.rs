@@ -37,7 +37,7 @@ fn test_python_type_to_sql_all_dialects() {
     );
     assert_eq!(
         python_type_to_sql("datetime", Dialect::Postgres, false),
-        "TIMESTAMPTZ"
+        "TIMESTAMP"
     );
     assert_eq!(
         python_type_to_sql("datetime", Dialect::Mysql, false),
