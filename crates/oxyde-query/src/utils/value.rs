@@ -179,7 +179,9 @@ fn typed_null(typ: Option<&str>) -> Value {
 /// This is the **single source of truth** for type name → type category mapping.
 /// Used by `typed_null`, `parse_string_by_type`, and array element type resolution.
 fn classify_type(typ: &str) -> Option<ArrayType> {
-    match typ {
+    // Strip precision suffix: "VARCHAR(100)" → "VARCHAR", "NUMERIC(10,2)" → "NUMERIC"
+    let base = typ.split('(').next().unwrap_or(typ);
+    match base {
         "INT" | "INTEGER" | "BIGINT" | "SMALLINT" | "TINYINT" | "SERIAL" | "BIGSERIAL"
         | "SMALLSERIAL" | "INT2" | "INT4" | "INT8" | "TIMEDELTA" | "INTERVAL" => {
             Some(ArrayType::BigInt)
@@ -196,7 +198,7 @@ fn classify_type(typ: &str) -> Option<ArrayType> {
         "DATE" => Some(ArrayType::ChronoDate),
         "TIME" | "TIMETZ" => Some(ArrayType::ChronoTime),
         "BYTES" | "BYTEA" | "BLOB" => Some(ArrayType::Bytes),
-        t if t.starts_with("DECIMAL") || t.starts_with("NUMERIC") => Some(ArrayType::Decimal),
+        "DECIMAL" | "NUMERIC" => Some(ArrayType::Decimal),
         _ => None,
     }
 }

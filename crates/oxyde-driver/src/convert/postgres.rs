@@ -226,11 +226,16 @@ fn fallback_str(buf: &mut Vec<u8>, row: &PgRow, idx: usize) {
 /// (handles both IR names like "int" and SQL names like "BIGINT").
 /// Uses `Vec<Option<T>>` to correctly handle NULL elements within arrays.
 fn encode_pg_array(buf: &mut Vec<u8>, row: &PgRow, idx: usize, inner_raw: &str) {
-    let inner = inner_raw.to_ascii_lowercase();
-    match inner.as_str() {
+    let lowered = inner_raw.to_ascii_lowercase();
+    // Strip precision suffix: "varchar(100)" → "varchar", "numeric(10,2)" → "numeric"
+    let inner = lowered.split('(').next().unwrap_or(&lowered);
+    match inner {
         "int" | "integer" | "bigint" | "smallint" | "tinyint" | "serial" | "bigserial"
         | "smallserial" | "int2" | "int4" | "int8" | "timedelta" | "interval" => {
-            encode_pg_array_opt::<i64>(buf, row, idx, write_i64);
+            // Try i64 first (BIGINT[]), fall back to i32 (INTEGER[]/SMALLINT[])
+            if !try_encode_pg_array_opt::<i64>(buf, row, idx, write_i64) {
+                encode_pg_array_opt::<i32>(buf, row, idx, |b, v| write_i64(b, i64::from(v)));
+            }
         }
         "float" | "double" | "real" | "float4" | "float8" | "double precision" => {
             encode_pg_array_opt::<f64>(buf, row, idx, write_f64);
@@ -280,6 +285,36 @@ fn encode_pg_array(buf: &mut Vec<u8>, row: &PgRow, idx: usize, inner_raw: &str) 
             Ok(None) => write_nil(buf),
             Err(_) => fallback_str(buf, row, idx),
         },
+    }
+}
+
+/// Try to encode `Vec<Option<T>>` where T is Copy. Returns false on type mismatch.
+fn try_encode_pg_array_opt<T>(
+    buf: &mut Vec<u8>,
+    row: &PgRow,
+    idx: usize,
+    write_fn: impl Fn(&mut Vec<u8>, T),
+) -> bool
+where
+    T: sqlx::Type<sqlx::Postgres> + for<'r> sqlx::Decode<'r, sqlx::Postgres> + Copy,
+    Vec<Option<T>>: sqlx::Type<sqlx::Postgres> + for<'r> sqlx::Decode<'r, sqlx::Postgres>,
+{
+    match row.try_get::<Option<Vec<Option<T>>>, _>(idx) {
+        Ok(Some(v)) => {
+            write_array_len(buf, v.len() as u32);
+            for item in &v {
+                match item {
+                    Some(val) => write_fn(buf, *val),
+                    None => write_nil(buf),
+                }
+            }
+            true
+        }
+        Ok(None) => {
+            write_nil(buf);
+            true
+        }
+        Err(_) => false,
     }
 }
 
