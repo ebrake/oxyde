@@ -10,13 +10,14 @@ fn test_python_type_to_sql_all_dialects() {
     assert_eq!(python_type_to_sql("int", Dialect::Sqlite, false), "INTEGER");
     assert_eq!(
         python_type_to_sql("int", Dialect::Postgres, false),
-        "BIGINT"
+        "INTEGER"
     );
     assert_eq!(
         python_type_to_sql("int", Dialect::Postgres, true),
         "BIGSERIAL"
     ); // PK
-    assert_eq!(python_type_to_sql("int", Dialect::Mysql, false), "BIGINT");
+    assert_eq!(python_type_to_sql("int", Dialect::Mysql, false), "INTEGER");
+    assert_eq!(python_type_to_sql("int", Dialect::Mysql, true), "BIGINT"); // PK
 
     // Test bool type
     assert_eq!(
@@ -70,7 +71,7 @@ fn test_python_type_to_sql_all_dialects() {
     // Test array types
     assert_eq!(
         python_type_to_sql("int[]", Dialect::Postgres, false),
-        "BIGINT[]"
+        "INTEGER[]"
     );
     assert_eq!(
         python_type_to_sql("str[]", Dialect::Postgres, false),

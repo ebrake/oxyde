@@ -60,7 +60,7 @@ pub(crate) fn python_type_to_sql(python_type: &str, dialect: Dialect, is_pk: boo
         },
         Dialect::Postgres => match python_type {
             "int" if is_pk => "BIGSERIAL".to_string(),
-            "int" => "BIGINT".to_string(),
+            "int" => "INTEGER".to_string(),
             "str" => "TEXT".to_string(),
             "float" => "DOUBLE PRECISION".to_string(),
             "bool" => "BOOLEAN".to_string(),
@@ -75,7 +75,8 @@ pub(crate) fn python_type_to_sql(python_type: &str, dialect: Dialect, is_pk: boo
             _ => "TEXT".to_string(),
         },
         Dialect::Mysql => match python_type {
-            "int" => "BIGINT".to_string(),
+            "int" if is_pk => "BIGINT".to_string(),
+            "int" => "INTEGER".to_string(),
             "str" => "TEXT".to_string(),
             "float" => "DOUBLE".to_string(),
             "bool" => "TINYINT".to_string(),
