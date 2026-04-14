@@ -90,7 +90,7 @@ from oxyde.queries import (
     execute_raw,
 )
 
-__version__ = "0.6.1"
+__version__ = "0.7.0"
 
 
 def __getattr__(name: str) -> type:

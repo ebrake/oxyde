@@ -207,7 +207,6 @@ marimo/_lsp/
 __marimo__/
 
 # Rust
-Cargo.lock
 **/*.rs.bk
 
 # Oxyde specific
