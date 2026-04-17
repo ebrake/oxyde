@@ -53,7 +53,7 @@ Example:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from typing_extensions import Self
 
@@ -75,6 +75,9 @@ if TYPE_CHECKING:
     from oxyde.models.base import Model
 
 
+TModel = TypeVar("TModel", bound="Model")
+
+
 class Query(
     FilteringMixin,
     PaginationMixin,
@@ -83,6 +86,7 @@ class Query(
     ExecutionMixin,
     MutationMixin,
     DebugMixin,
+    Generic[TModel],
 ):
     """
     Query builder for SELECT operations.

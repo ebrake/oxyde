@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ast
+import copy
 import inspect
 from datetime import date, datetime, time
 from decimal import Decimal
@@ -212,7 +214,70 @@ def _generate_create_params(model_class: type[Model]) -> str:
     return "\n".join(lines)
 
 
-def _generate_model_class_stub(model_class: type[Model]) -> str:
+def _has_overload_decorator(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """Return True if the function is decorated with ``@overload``."""
+    for dec in node.decorator_list:
+        if isinstance(dec, ast.Name) and dec.id == "overload":
+            return True
+        if isinstance(dec, ast.Attribute) and dec.attr == "overload":
+            return True
+    return False
+
+
+def _extract_top_level_copyable(tree: ast.Module) -> list[str]:
+    """Copy top-level imports and function definitions in source order.
+
+    - ``Import`` / ``ImportFrom``: copied verbatim (needed for cross-module type
+      resolution and for type references used by helper functions).
+    - ``FunctionDef`` / ``AsyncFunctionDef``: copied with body replaced by
+      ``...`` (stub convention). Decorators and type annotations are preserved.
+      For ``@overload`` functions, only the ``@overload``-decorated variants are
+      kept; the implementation body (PEP 484 requires one in a ``.py`` file but
+      forbids it in a ``.pyi``) is dropped.
+    - Everything else (top-level classes, dataclasses, enums, assignments) is
+      intentionally skipped — those belong in dedicated modules.
+    """
+    overloaded_names: set[str] = {
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and _has_overload_decorator(node)
+    }
+
+    result: list[str] = []
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            result.append(ast.unparse(node))
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            # Skip the non-@overload implementation of an overloaded function —
+            # `.pyi` cannot contain such an implementation.
+            if node.name in overloaded_names and not _has_overload_decorator(node):
+                continue
+            node_copy = copy.deepcopy(node)
+            node_copy.body = [ast.Expr(value=ast.Constant(value=Ellipsis))]
+            result.append(ast.unparse(node_copy))
+    return result
+
+
+def _extract_custom_methods(class_def: ast.ClassDef) -> list[str]:
+    """Extract user-defined methods from a Model ClassDef with body replaced by `...`.
+
+    Returns list of method definitions as strings, each indented relative to the
+    class body (i.e. without the leading class indent — caller adds it).
+    """
+    methods: list[str] = []
+    for child in class_def.body:
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            child_copy = copy.deepcopy(child)
+            child_copy.body = [ast.Expr(value=ast.Constant(value=Ellipsis))]
+            methods.append(ast.unparse(child_copy))
+    return methods
+
+
+def _generate_model_class_stub(
+    model_class: type[Model],
+    custom_methods: list[str],
+) -> str:
     """Generate stub class definition for model (to avoid circular imports in .pyi)."""
     from oxyde.models.field import OxydeFieldInfo
     from oxyde.models.utils import _unpack_annotated, _unwrap_optional
@@ -252,8 +317,13 @@ def _generate_model_class_stub(model_class: type[Model]) -> str:
         else:
             lines.append(f"    {field_name}: {type_name}")
 
+    # Copy user-defined methods (body replaced by `...`)
+    for method_src in custom_methods:
+        for raw_line in method_src.splitlines():
+            lines.append(f"    {raw_line}" if raw_line else "")
+
     # Add objects manager with proper type
-    lines.append(f'    objects: "{model_name}Manager"')
+    lines.append(f'    objects: ClassVar["{model_name}Manager"]')
 
     return "\n".join(lines)
 
@@ -290,7 +360,7 @@ class {model_name}Query(Query[{model_name}]):
         \"\"\"Exclude objects matching field lookups.\"\"\"
         ...
 
-    def order_by(self, *fields: {order_by_literal}) -> "{model_name}Query":
+    def order_by(self, *fields: {order_by_literal}) -> "{model_name}Query":  # type: ignore[override]
         \"\"\"Order results by fields.\"\"\"
         ...
 
@@ -306,7 +376,7 @@ class {model_name}Query(Query[{model_name}]):
         \"\"\"Return distinct results.\"\"\"
         ...
 
-    def select(self, *fields: {field_literal}) -> "{model_name}Query":
+    def select(self, *fields: {field_literal}) -> "{model_name}Query":  # type: ignore[override]
         \"\"\"Select specific fields.\"\"\"
         ...
 
@@ -330,7 +400,7 @@ class {model_name}Query(Query[{model_name}]):
         \"\"\"Add computed fields using aggregate functions.\"\"\"
         ...
 
-    def group_by(self, *fields: {field_literal}) -> "{model_name}Query":
+    def group_by(self, *fields: {field_literal}) -> "{model_name}Query":  # type: ignore[override]
         \"\"\"Add GROUP BY clause.\"\"\"
         ...
 
@@ -338,11 +408,11 @@ class {model_name}Query(Query[{model_name}]):
         \"\"\"Add HAVING clause for filtering grouped results.\"\"\"
         ...
 
-    def values(self, *fields: {field_literal}) -> "{model_name}Query":
+    def values(self, *fields: {field_literal}) -> "{model_name}Query":  # type: ignore[override]
         \"\"\"Return dicts instead of models.\"\"\"
         ...
 
-    def values_list(self, *fields: {field_literal}, flat: bool = False) -> "{model_name}Query":
+    def values_list(self, *fields: {field_literal}, flat: bool = False) -> "{model_name}Query":  # type: ignore[override]
         \"\"\"Return tuples/values instead of models.\"\"\"
         ...
 
@@ -424,7 +494,7 @@ class {model_name}Query(Query[{model_name}]):
         \"\"\"Get minimum field value.\"\"\"
         ...
 
-    async def update(
+    async def update(  # type: ignore[override]
         self,
         *,
         client: Any | None = None,
@@ -482,11 +552,11 @@ class {model_name}Manager(QueryManager[{model_name}]):
         \"\"\"Exclude objects matching field lookups.\"\"\"
         ...
 
-    def values(self, *fields: {field_literal}) -> {model_name}Query:
+    def values(self, *fields: {field_literal}) -> {model_name}Query:  # type: ignore[override]
         \"\"\"Return dicts instead of models.\"\"\"
         ...
 
-    def values_list(self, *fields: {field_literal}, flat: bool = False) -> {model_name}Query:
+    def values_list(self, *fields: {field_literal}, flat: bool = False) -> {model_name}Query:  # type: ignore[override]
         \"\"\"Return tuples/values instead of models.\"\"\"
         ...
 
@@ -631,7 +701,7 @@ class {model_name}Manager(QueryManager[{model_name}]):
         \"\"\"Get minimum field value.\"\"\"
         ...
 
-    async def create(
+    async def create(  # type: ignore[override]
         self,
         *,
         instance: {model_name} | None = None,
@@ -642,7 +712,7 @@ class {model_name}Manager(QueryManager[{model_name}]):
         \"\"\"Create new object.\"\"\"
         ...
 
-    async def bulk_create(
+    async def bulk_create(  # type: ignore[override]
         self,
         objects: list[{model_name}],
         *,
@@ -653,7 +723,7 @@ class {model_name}Manager(QueryManager[{model_name}]):
         \"\"\"Bulk create objects.\"\"\"
         ...
 
-    async def bulk_update(
+    async def bulk_update(  # type: ignore[override]
         self,
         objects: list[{model_name}],
         fields: list[str],
@@ -666,6 +736,58 @@ class {model_name}Manager(QueryManager[{model_name}]):
 """
 
     return queryset_class + manager_class
+
+
+def _build_stub(file_path: Path, models: list[type[Model]]) -> str:
+    """Build .pyi stub content for a source file that contains Model classes.
+
+    Policy: the .pyi covers models only. From the source we copy top-level
+    imports (needed to resolve cross-module FK types) and custom methods
+    defined directly on each Model class. Non-model top-level code (functions,
+    dataclasses, constants) is intentionally not propagated — models belong
+    in dedicated files.
+    """
+    source = file_path.read_text()
+    tree = ast.parse(source)
+
+    user_imports = _extract_top_level_copyable(tree)
+
+    model_names = {m.__name__ for m in models}
+    custom_methods_by_model: dict[str, list[str]] = {}
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name in model_names:
+            custom_methods_by_model[node.name] = _extract_custom_methods(node)
+
+    parts: list[str] = [
+        "# Auto-generated by oxyde generate-stubs",
+        "# DO NOT EDIT - This file will be overwritten",
+        "",
+        "from typing import Any, ClassVar, Literal",
+        "from datetime import datetime, date, time",
+        "from decimal import Decimal",
+        "from uuid import UUID",
+        "",
+        "from oxyde import Model",
+        "from oxyde.queries import Query, QueryManager",
+        "",
+    ]
+
+    if user_imports:
+        parts.extend(user_imports)
+        parts.append("")
+
+    for model in models:
+        parts.append(
+            _generate_model_class_stub(
+                model,
+                custom_methods_by_model.get(model.__name__, []),
+            )
+        )
+        parts.append("")
+        parts.append(generate_model_stub(model))
+        parts.append("")
+
+    return "\n".join(parts)
 
 
 def generate_stub_for_file(file_path: Path) -> None:
@@ -699,14 +821,8 @@ def generate_stub_for_file(file_path: Path) -> None:
         print(f"No table models found in {file_path}")
         return
 
-    # Generate stub content
-    stub_content = ""
-    for model in models:
-        stub_content += generate_model_stub(model) + "\n\n"
-
-    # Write .pyi file
     stub_path = file_path.with_suffix(".pyi")
-    stub_path.write_text(stub_content)
+    stub_path.write_text(_build_stub(file_path, models))
     print(f"Generated stub: {stub_path}")
 
 
@@ -731,7 +847,6 @@ def generate_stubs_for_models(
         if not getattr(model, "_is_table", False):
             continue
 
-        # Get source file path
         source_file = inspect.getfile(model)
         file_path = Path(source_file)
 
@@ -739,40 +854,10 @@ def generate_stubs_for_models(
             file_models[file_path] = []
         file_models[file_path].append(model)
 
-    # Generate stubs
-    result = {}
-    for file_path, file_model_list in file_models.items():
-        stub_content_parts = []
-
-        # Common imports (no model imports - we define them in stub to avoid circular imports)
-        imports = [
-            "# Auto-generated by oxyde generate-stubs",
-            "# DO NOT EDIT - This file will be overwritten",
-            "",
-            "from typing import Any, Literal",
-            "from datetime import datetime, date, time",
-            "from decimal import Decimal",
-            "from uuid import UUID",
-            "",
-            "from oxyde import Model",
-            "from oxyde.queries import Query, QueryManager",
-            "",
-        ]
-
-        stub_content_parts.append("\n".join(imports))
-
-        # Generate model class stubs first (to define the types)
-        for model in file_model_list:
-            stub_content_parts.append(_generate_model_class_stub(model))
-
-        # Generate Query and Manager stubs for each model
-        for model in file_model_list:
-            stub_content_parts.append(generate_model_stub(model))
-
-        stub_content = "\n\n".join(stub_content_parts)
-        result[file_path.with_suffix(".pyi")] = stub_content
-
-    return result
+    return {
+        file_path.with_suffix(".pyi"): _build_stub(file_path, file_model_list)
+        for file_path, file_model_list in file_models.items()
+    }
 
 
 def write_stubs(stub_mapping: dict[Path, str]) -> None:

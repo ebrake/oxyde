@@ -1,4 +1,4 @@
-"""Edge: Model alongside module-level helper. AST-merge case — helper must survive."""
+"""Edge: module-level helper functions alongside a Model."""
 
 from __future__ import annotations
 
@@ -13,5 +13,9 @@ class Note(Model):
         is_table = True
 
 
-async def fetch_recent_notes(limit: int) -> list[Note]:
-    return await Note.objects.filter().limit(limit).all()
+async def fetch_recent_notes(limit: int = 10) -> list[Note]:
+    return await Note.objects.all()
+
+
+def format_note(note: Note) -> str:
+    return f"{note.id}: {note.text}"

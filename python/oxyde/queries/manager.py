@@ -23,7 +23,7 @@ Example:
 from __future__ import annotations
 
 from collections.abc import Coroutine, Iterable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from oxyde.exceptions import IntegrityError, ManagerError, NotFoundError
 from oxyde.models.serializers import _derive_create_data
@@ -34,13 +34,16 @@ if TYPE_CHECKING:
     from oxyde.queries.base import SupportsExecute
 
 
-class QueryManager:
+TModel = TypeVar("TModel", bound="Model")
+
+
+class QueryManager(Generic[TModel]):
     """Manager that provides Query access for a model.
 
     All methods delegate to Query - this is just a factory/proxy.
     """
 
-    def __init__(self, model_class: type[Model]) -> None:
+    def __init__(self, model_class: type[TModel]) -> None:
         self.model_class = model_class
 
     def _query(self) -> Query:

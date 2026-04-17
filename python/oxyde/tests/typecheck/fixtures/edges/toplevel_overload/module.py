@@ -1,4 +1,4 @@
-"""Edge: Model + @overload helper."""
+"""Edge: module-level @overload function alongside a Model."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import overload
 from oxyde import Field, Model
 
 
-class Item(Model):
+class Record(Model):
     id: int | None = Field(default=None, db_pk=True)
     name: str = Field(default="")
 
@@ -16,9 +16,8 @@ class Item(Model):
 
 
 @overload
-def resolve(key: int) -> Item: ...
+def resolve(x: int) -> str: ...
 @overload
-def resolve(key: str) -> Item | None: ...
-def resolve(key: int | str) -> Item | None:
-    _ = key
-    return None
+def resolve(x: str) -> int: ...
+def resolve(x: int | str) -> int | str:
+    return str(x) if isinstance(x, int) else int(x)
