@@ -341,7 +341,7 @@ fn test_compute_diff_detects_new_table_and_column() {
     table.fields.push(sample_field("name"));
     new_snapshot.add_table(table);
 
-    let ops = compute_diff(&old, &new_snapshot);
+    let ops = compute_diff(&old, &new_snapshot).unwrap();
     assert!(matches!(ops[0], MigrationOp::CreateTable { .. }));
 }
 
@@ -685,7 +685,7 @@ fn test_compute_diff_detects_alter_column() {
     };
     new_snapshot.add_table(new_table);
 
-    let ops = compute_diff(&old, &new_snapshot);
+    let ops = compute_diff(&old, &new_snapshot).unwrap();
 
     // Should detect AlterColumn for email field
     assert_eq!(ops.len(), 1, "Should have exactly one operation");
@@ -789,7 +789,7 @@ fn test_compute_diff_detects_dropped_table() {
 
     let new = Snapshot::new(); // Empty - table dropped
 
-    let ops = compute_diff(&old, &new);
+    let ops = compute_diff(&old, &new).unwrap();
     assert_eq!(ops.len(), 1);
     match &ops[0] {
         MigrationOp::DropTable { name, table } => {
@@ -810,7 +810,7 @@ fn test_compute_diff_detects_dropped_column() {
     table.fields.retain(|f| f.name != "email"); // Remove email column
     new.add_table(table);
 
-    let ops = compute_diff(&old, &new);
+    let ops = compute_diff(&old, &new).unwrap();
     let drop_ops: Vec<_> = ops
         .iter()
         .filter(|op| matches!(op, MigrationOp::DropColumn { .. }))
@@ -846,7 +846,7 @@ fn test_compute_diff_detects_index_changes() {
     });
     new.add_table(table);
 
-    let ops = compute_diff(&old, &new);
+    let ops = compute_diff(&old, &new).unwrap();
 
     let create_idx = ops.iter().any(
         |op| matches!(op, MigrationOp::CreateIndex { index, .. } if index.name == "users_name_idx"),
@@ -1011,5 +1011,176 @@ fn test_array_field_preserves_constraints() {
     assert!(
         create.contains("TEXT"),
         "SQLite arrays should be TEXT, got: {create}"
+    );
+}
+
+#[test]
+fn test_compute_diff_emits_create_tables_in_topological_order() {
+    // Chain: posts → comments → reactions (reactions depends on comments, etc.)
+    // Topological order must be: posts, comments, reactions — independently
+    // of HashMap iteration order.
+    fn table_with_fk(name: &str, ref_table: Option<&str>) -> TableDef {
+        let mut fks = Vec::new();
+        if let Some(r) = ref_table {
+            fks.push(ForeignKeyDef {
+                name: format!("fk_{}_{}", name, r),
+                columns: vec![format!("{}_id", r)],
+                ref_table: r.to_string(),
+                ref_columns: vec!["id".to_string()],
+                on_delete: Some("CASCADE".to_string()),
+                on_update: Some("NO ACTION".to_string()),
+            });
+        }
+        TableDef {
+            name: name.to_string(),
+            fields: vec![FieldDef {
+                name: "id".into(),
+                python_type: "int".into(),
+                db_type: None,
+                nullable: false,
+                primary_key: true,
+                unique: true,
+                default: None,
+                auto_increment: false,
+                max_length: None,
+                max_digits: None,
+                decimal_places: None,
+            }],
+            indexes: vec![],
+            foreign_keys: fks,
+            checks: vec![],
+            comment: None,
+        }
+    }
+
+    // Run multiple times: HashMap iteration order varies per process, but
+    // topo-sort output must remain stable within a process — and across runs
+    // after the fix.
+    for _ in 0..10 {
+        let old = Snapshot::new();
+        let mut new = Snapshot::new();
+        new.add_table(table_with_fk("reactions", Some("comments")));
+        new.add_table(table_with_fk("comments", Some("posts")));
+        new.add_table(table_with_fk("posts", None));
+
+        let ops = compute_diff(&old, &new).unwrap();
+        let create_names: Vec<&str> = ops
+            .iter()
+            .filter_map(|op| match op {
+                MigrationOp::CreateTable { table } => Some(table.name.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            create_names,
+            vec!["posts", "comments", "reactions"],
+            "CreateTable ops must be in topological order (referenced tables first)"
+        );
+    }
+}
+
+#[test]
+fn test_compute_diff_rejects_cyclic_foreign_keys() {
+    // a → b → a cycle
+    fn table_with_fk(name: &str, ref_table: &str) -> TableDef {
+        TableDef {
+            name: name.to_string(),
+            fields: vec![FieldDef {
+                name: "id".into(),
+                python_type: "int".into(),
+                db_type: None,
+                nullable: false,
+                primary_key: true,
+                unique: true,
+                default: None,
+                auto_increment: false,
+                max_length: None,
+                max_digits: None,
+                decimal_places: None,
+            }],
+            indexes: vec![],
+            foreign_keys: vec![ForeignKeyDef {
+                name: format!("fk_{}_{}", name, ref_table),
+                columns: vec![format!("{}_id", ref_table)],
+                ref_table: ref_table.to_string(),
+                ref_columns: vec!["id".into()],
+                on_delete: Some("NO ACTION".into()),
+                on_update: Some("NO ACTION".into()),
+            }],
+            checks: vec![],
+            comment: None,
+        }
+    }
+
+    let old = Snapshot::new();
+    let mut new = Snapshot::new();
+    new.add_table(table_with_fk("a", "b"));
+    new.add_table(table_with_fk("b", "a"));
+
+    let result = compute_diff(&old, &new);
+    assert!(result.is_err(), "cyclic FK schema must error out");
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("cyclic foreign key"),
+        "error should mention cycle: {err}"
+    );
+    assert!(err.contains("a") && err.contains("b"));
+}
+
+#[test]
+fn test_compute_diff_emits_drop_tables_in_reverse_topological_order() {
+    fn table_with_fk(name: &str, ref_table: Option<&str>) -> TableDef {
+        let mut fks = Vec::new();
+        if let Some(r) = ref_table {
+            fks.push(ForeignKeyDef {
+                name: format!("fk_{}_{}", name, r),
+                columns: vec![format!("{}_id", r)],
+                ref_table: r.to_string(),
+                ref_columns: vec!["id".to_string()],
+                on_delete: Some("CASCADE".to_string()),
+                on_update: Some("NO ACTION".to_string()),
+            });
+        }
+        TableDef {
+            name: name.to_string(),
+            fields: vec![FieldDef {
+                name: "id".into(),
+                python_type: "int".into(),
+                db_type: None,
+                nullable: false,
+                primary_key: true,
+                unique: true,
+                default: None,
+                auto_increment: false,
+                max_length: None,
+                max_digits: None,
+                decimal_places: None,
+            }],
+            indexes: vec![],
+            foreign_keys: fks,
+            checks: vec![],
+            comment: None,
+        }
+    }
+
+    let mut old = Snapshot::new();
+    old.add_table(table_with_fk("posts", None));
+    old.add_table(table_with_fk("comments", Some("posts")));
+    let new = Snapshot::new();
+
+    let ops = compute_diff(&old, &new).unwrap();
+    let drop_names: Vec<&str> = ops
+        .iter()
+        .filter_map(|op| match op {
+            MigrationOp::DropTable { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        drop_names,
+        vec!["comments", "posts"],
+        "DropTable ops must be in reverse topological order (referencing tables first)"
     );
 }

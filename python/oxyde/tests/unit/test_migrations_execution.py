@@ -10,6 +10,7 @@ import pytest
 
 from oxyde.core import migration_compute_diff, migration_to_sql
 from oxyde.migrations.context import MigrationContext
+from oxyde.migrations.replay import SchemaState
 
 
 
@@ -507,7 +508,7 @@ class TestDropOpsMinimalPayloadRegression:
 
     def test_rust_diff_drop_index_roundtrip(self):
         """Rust-diff emits drop_index; that JSON must flow back through migration_to_sql."""
-        old_snapshot = {
+        old_snapshot: dict = {
             "version": 1,
             "tables": {
                 "users": {
@@ -561,3 +562,525 @@ class TestDropOpsMinimalPayloadRegression:
         # Must not raise — round-trip through Rust must succeed
         sqls = migration_to_sql(ops_json, "postgres")
         assert any("idx_users_email" in s for s in sqls)
+
+
+ALL_DIALECTS = ["postgres", "mysql", "sqlite"]
+NON_SQLITE = ["postgres", "mysql"]
+
+
+def _field(name: str, **overrides) -> dict:
+    """Build a minimal field dict with sensible defaults."""
+    base = {
+        "name": name,
+        "python_type": "str",
+        "db_type": None,
+        "nullable": False,
+        "primary_key": False,
+        "unique": False,
+        "default": None,
+        "auto_increment": False,
+    }
+    base.update(overrides)
+    return base
+
+
+def _render(ctx: MigrationContext, dialect: str) -> list[str]:
+    """Render collected ops through Rust migration_to_sql."""
+    return migration_to_sql(json.dumps(ctx.get_collected_operations()), dialect)
+
+
+class TestOpMatrix:
+    """Every MigrationOp × every supported dialect → valid SQL.
+
+    Ensures Python context.py payload shape matches Rust MigrationOp schema
+    for all operations. Any future mismatch (like the drop_fk bug) fails here.
+    """
+
+    @pytest.mark.parametrize("dialect", ALL_DIALECTS)
+    def test_create_table(self, dialect):
+        ctx = MigrationContext(mode="collect", dialect=dialect)
+        ctx.create_table(
+            "users",
+            fields=[
+                _field("id", python_type="int", primary_key=True, auto_increment=True),
+                _field("email", unique=True),
+            ],
+        )
+        sqls = _render(ctx, dialect)
+        assert any("CREATE TABLE" in s.upper() and "users" in s for s in sqls)
+
+    @pytest.mark.parametrize("dialect", ALL_DIALECTS)
+    def test_drop_table(self, dialect):
+        ctx = MigrationContext(mode="collect", dialect=dialect)
+        ctx.drop_table("users")
+        sqls = _render(ctx, dialect)
+        assert any("DROP TABLE" in s.upper() and "users" in s for s in sqls)
+
+    @pytest.mark.parametrize("dialect", ALL_DIALECTS)
+    def test_rename_table(self, dialect):
+        ctx = MigrationContext(mode="collect", dialect=dialect)
+        ctx.rename_table("users", "accounts")
+        sqls = _render(ctx, dialect)
+        assert any("users" in s and "accounts" in s for s in sqls)
+
+    @pytest.mark.parametrize("dialect", ALL_DIALECTS)
+    def test_add_column(self, dialect):
+        ctx = MigrationContext(mode="collect", dialect=dialect)
+        ctx.add_column("users", _field("nickname", nullable=True))
+        sqls = _render(ctx, dialect)
+        assert any("ADD" in s.upper() and "nickname" in s for s in sqls)
+
+    @pytest.mark.parametrize("dialect", ALL_DIALECTS)
+    def test_drop_column(self, dialect):
+        ctx = MigrationContext(mode="collect", dialect=dialect)
+        ctx.drop_column("users", "nickname")
+        sqls = _render(ctx, dialect)
+        assert any("DROP" in s.upper() and "nickname" in s for s in sqls)
+
+    @pytest.mark.parametrize("dialect", ALL_DIALECTS)
+    def test_rename_column(self, dialect):
+        ctx = MigrationContext(mode="collect", dialect=dialect)
+        ctx.rename_column("users", "nickname", "handle")
+        sqls = _render(ctx, dialect)
+        assert any("nickname" in s and "handle" in s for s in sqls)
+
+    @pytest.mark.parametrize("dialect", ALL_DIALECTS)
+    def test_create_index(self, dialect):
+        ctx = MigrationContext(mode="collect", dialect=dialect)
+        ctx.create_index(
+            "users",
+            {
+                "name": "idx_users_email",
+                "fields": ["email"],
+                "unique": False,
+                "method": None,
+            },
+        )
+        sqls = _render(ctx, dialect)
+        assert any("CREATE" in s.upper() and "INDEX" in s.upper() and "idx_users_email" in s for s in sqls)
+
+    @pytest.mark.parametrize("dialect", ALL_DIALECTS)
+    def test_drop_index(self, dialect):
+        ctx = MigrationContext(mode="collect", dialect=dialect)
+        ctx.drop_index("users", "idx_users_email")
+        sqls = _render(ctx, dialect)
+        assert any("DROP" in s.upper() and "idx_users_email" in s for s in sqls)
+
+    @pytest.mark.parametrize("dialect", NON_SQLITE)
+    def test_add_foreign_key(self, dialect):
+        ctx = MigrationContext(mode="collect", dialect=dialect)
+        ctx.add_foreign_key(
+            "posts",
+            "fk_posts_author",
+            ["author_id"],
+            "users",
+            ["id"],
+            on_delete="CASCADE",
+        )
+        sqls = _render(ctx, dialect)
+        assert any("fk_posts_author" in s and "users" in s for s in sqls)
+
+    def test_add_foreign_key_sqlite_rejected(self):
+        ctx = MigrationContext(mode="collect", dialect="sqlite")
+        ctx.add_foreign_key("posts", "fk_posts_author", ["author_id"], "users", ["id"])
+        with pytest.raises(Exception, match="SQLite"):
+            _render(ctx, "sqlite")
+
+    @pytest.mark.parametrize("dialect", NON_SQLITE)
+    def test_drop_foreign_key(self, dialect):
+        ctx = MigrationContext(mode="collect", dialect=dialect)
+        ctx.drop_foreign_key("posts", "fk_posts_author")
+        sqls = _render(ctx, dialect)
+        assert any("DROP" in s.upper() and "fk_posts_author" in s for s in sqls)
+
+    def test_drop_foreign_key_sqlite_rejected(self):
+        ctx = MigrationContext(mode="collect", dialect="sqlite")
+        ctx.drop_foreign_key("posts", "fk_posts_author")
+        with pytest.raises(Exception, match="SQLite"):
+            _render(ctx, "sqlite")
+
+    @pytest.mark.parametrize("dialect", NON_SQLITE)
+    def test_add_check(self, dialect):
+        ctx = MigrationContext(mode="collect", dialect=dialect)
+        ctx.add_check("users", "chk_users_age", "age >= 0")
+        sqls = _render(ctx, dialect)
+        assert any("chk_users_age" in s and "CHECK" in s.upper() for s in sqls)
+
+    def test_add_check_sqlite_rejected(self):
+        ctx = MigrationContext(mode="collect", dialect="sqlite")
+        ctx.add_check("users", "chk_users_age", "age >= 0")
+        with pytest.raises(Exception, match="SQLite"):
+            _render(ctx, "sqlite")
+
+    @pytest.mark.parametrize("dialect", NON_SQLITE)
+    def test_drop_check(self, dialect):
+        ctx = MigrationContext(mode="collect", dialect=dialect)
+        ctx.drop_check("users", "chk_users_age")
+        sqls = _render(ctx, dialect)
+        assert any("DROP" in s.upper() and "chk_users_age" in s for s in sqls)
+
+    def test_drop_check_sqlite_rejected(self):
+        ctx = MigrationContext(mode="collect", dialect="sqlite")
+        ctx.drop_check("users", "chk_users_age")
+        with pytest.raises(Exception, match="SQLite"):
+            _render(ctx, "sqlite")
+
+
+def _base_snapshot() -> dict:
+    """Snapshot with a single `users` table (id, email)."""
+    return {
+        "version": 1,
+        "tables": {
+            "users": {
+                "name": "users",
+                "fields": [
+                    _field("id", python_type="int", primary_key=True, auto_increment=True),
+                    _field("email", unique=True),
+                ],
+                "indexes": [],
+                "foreign_keys": [],
+                "checks": [],
+                "comment": None,
+            }
+        },
+    }
+
+
+class TestMigrationInvariants:
+    """Architectural invariants that protect against regressions in ops composition."""
+
+    # ── Rust-diff round-trip: emit → migration_to_sql must not fail ─────
+
+    @pytest.mark.parametrize("dialect", NON_SQLITE)
+    def test_roundtrip_add_column(self, dialect):
+        old = _base_snapshot()
+        new = _base_snapshot()
+        new["tables"]["users"]["fields"].append(_field("phone", nullable=True))
+
+        ops_json = migration_compute_diff(json.dumps(old), json.dumps(new))
+        assert any(op["type"] == "add_column" for op in json.loads(ops_json))
+        migration_to_sql(ops_json, dialect)  # must not raise
+
+    @pytest.mark.parametrize("dialect", ALL_DIALECTS)
+    def test_roundtrip_drop_column(self, dialect):
+        old = _base_snapshot()
+        old["tables"]["users"]["fields"].append(_field("phone", nullable=True))
+        new = _base_snapshot()
+
+        ops_json = migration_compute_diff(json.dumps(old), json.dumps(new))
+        assert any(op["type"] == "drop_column" for op in json.loads(ops_json))
+        migration_to_sql(ops_json, dialect)
+
+    @pytest.mark.parametrize("dialect", ALL_DIALECTS)
+    def test_roundtrip_create_index(self, dialect):
+        old = _base_snapshot()
+        new = _base_snapshot()
+        new["tables"]["users"]["indexes"].append(
+            {
+                "name": "idx_users_email",
+                "fields": ["email"],
+                "unique": False,
+                "method": None,
+            }
+        )
+
+        ops_json = migration_compute_diff(json.dumps(old), json.dumps(new))
+        assert any(op["type"] == "create_index" for op in json.loads(ops_json))
+        migration_to_sql(ops_json, dialect)
+
+    @pytest.mark.parametrize("dialect", ALL_DIALECTS)
+    def test_roundtrip_drop_index(self, dialect):
+        old = _base_snapshot()
+        old["tables"]["users"]["indexes"].append(
+            {
+                "name": "idx_users_email",
+                "fields": ["email"],
+                "unique": False,
+                "method": None,
+            }
+        )
+        new = _base_snapshot()
+
+        ops_json = migration_compute_diff(json.dumps(old), json.dumps(new))
+        assert any(op["type"] == "drop_index" for op in json.loads(ops_json))
+        migration_to_sql(ops_json, dialect)
+
+    @pytest.mark.parametrize("dialect", NON_SQLITE)
+    def test_roundtrip_add_foreign_key(self, dialect):
+        old = _base_snapshot()
+        old["tables"]["posts"] = {
+            "name": "posts",
+            "fields": [
+                _field("id", python_type="int", primary_key=True),
+                _field("author_id", python_type="int"),
+            ],
+            "indexes": [],
+            "foreign_keys": [],
+            "checks": [],
+            "comment": None,
+        }
+        new = json.loads(json.dumps(old))  # deep copy
+        new["tables"]["posts"]["foreign_keys"].append(
+            {
+                "name": "fk_posts_author",
+                "columns": ["author_id"],
+                "ref_table": "users",
+                "ref_columns": ["id"],
+                "on_delete": "CASCADE",
+                "on_update": "NO ACTION",
+            }
+        )
+
+        ops_json = migration_compute_diff(json.dumps(old), json.dumps(new))
+        assert any(op["type"] == "add_foreign_key" for op in json.loads(ops_json))
+        migration_to_sql(ops_json, dialect)
+
+    @pytest.mark.parametrize("dialect", NON_SQLITE)
+    def test_roundtrip_drop_foreign_key(self, dialect):
+        old = _base_snapshot()
+        old["tables"]["posts"] = {
+            "name": "posts",
+            "fields": [
+                _field("id", python_type="int", primary_key=True),
+                _field("author_id", python_type="int"),
+            ],
+            "indexes": [],
+            "foreign_keys": [
+                {
+                    "name": "fk_posts_author",
+                    "columns": ["author_id"],
+                    "ref_table": "users",
+                    "ref_columns": ["id"],
+                    "on_delete": "CASCADE",
+                    "on_update": "NO ACTION",
+                }
+            ],
+            "checks": [],
+            "comment": None,
+        }
+        new = json.loads(json.dumps(old))
+        new["tables"]["posts"]["foreign_keys"] = []
+
+        ops_json = migration_compute_diff(json.dumps(old), json.dumps(new))
+        assert any(op["type"] == "drop_foreign_key" for op in json.loads(ops_json))
+        migration_to_sql(ops_json, dialect)
+
+    @pytest.mark.parametrize("dialect", NON_SQLITE)
+    def test_roundtrip_add_check(self, dialect):
+        old = _base_snapshot()
+        new = _base_snapshot()
+        new["tables"]["users"]["checks"].append(
+            {"name": "chk_users_age", "expression": "age >= 0"}
+        )
+
+        ops_json = migration_compute_diff(json.dumps(old), json.dumps(new))
+        assert any(op["type"] == "add_check" for op in json.loads(ops_json))
+        migration_to_sql(ops_json, dialect)
+
+    @pytest.mark.parametrize("dialect", NON_SQLITE)
+    def test_roundtrip_drop_check(self, dialect):
+        old = _base_snapshot()
+        old["tables"]["users"]["checks"].append(
+            {"name": "chk_users_age", "expression": "age >= 0"}
+        )
+        new = _base_snapshot()
+
+        ops_json = migration_compute_diff(json.dumps(old), json.dumps(new))
+        assert any(op["type"] == "drop_check" for op in json.loads(ops_json))
+        migration_to_sql(ops_json, dialect)
+
+    # ── Reverse symmetry on SchemaState ─────────────────────────────────
+
+    def test_reverse_create_drop_table(self):
+        state = SchemaState()
+        initial = state.to_snapshot()
+
+        state.apply_operation(
+            {
+                "type": "create_table",
+                "table": {
+                    "name": "t",
+                    "fields": [_field("id", python_type="int", primary_key=True)],
+                    "indexes": [],
+                    "foreign_keys": [],
+                    "checks": [],
+                    "comment": None,
+                },
+            }
+        )
+        state.apply_operation({"type": "drop_table", "name": "t"})
+        assert state.to_snapshot() == initial
+
+    def test_reverse_add_drop_column(self):
+        state = SchemaState()
+        state.apply_operation(
+            {
+                "type": "create_table",
+                "table": {
+                    "name": "t",
+                    "fields": [_field("id", python_type="int", primary_key=True)],
+                    "indexes": [],
+                    "foreign_keys": [],
+                    "checks": [],
+                    "comment": None,
+                },
+            }
+        )
+        baseline = state.to_snapshot()
+
+        state.apply_operation(
+            {"type": "add_column", "table": "t", "field": _field("email")}
+        )
+        state.apply_operation({"type": "drop_column", "table": "t", "field": "email"})
+        assert state.to_snapshot() == baseline
+
+    def test_reverse_create_drop_index(self):
+        state = SchemaState()
+        state.apply_operation(
+            {
+                "type": "create_table",
+                "table": {
+                    "name": "t",
+                    "fields": [
+                        _field("id", python_type="int", primary_key=True),
+                        _field("email"),
+                    ],
+                    "indexes": [],
+                    "foreign_keys": [],
+                    "checks": [],
+                    "comment": None,
+                },
+            }
+        )
+        baseline = state.to_snapshot()
+
+        idx = {
+            "name": "idx_t_email",
+            "fields": ["email"],
+            "unique": False,
+            "method": None,
+        }
+        state.apply_operation({"type": "create_index", "table": "t", "index": idx})
+        state.apply_operation({"type": "drop_index", "table": "t", "name": idx["name"]})
+        assert state.to_snapshot() == baseline
+
+    def test_reverse_add_drop_foreign_key(self):
+        state = SchemaState()
+        state.apply_operation(
+            {
+                "type": "create_table",
+                "table": {
+                    "name": "posts",
+                    "fields": [
+                        _field("id", python_type="int", primary_key=True),
+                        _field("author_id", python_type="int"),
+                    ],
+                    "indexes": [],
+                    "foreign_keys": [],
+                    "checks": [],
+                    "comment": None,
+                },
+            }
+        )
+        baseline = state.to_snapshot()
+
+        fk = {
+            "name": "fk_posts_author",
+            "columns": ["author_id"],
+            "ref_table": "users",
+            "ref_columns": ["id"],
+            "on_delete": "CASCADE",
+            "on_update": "NO ACTION",
+        }
+        state.apply_operation({"type": "add_foreign_key", "table": "posts", "fk": fk})
+        state.apply_operation(
+            {"type": "drop_foreign_key", "table": "posts", "name": fk["name"]}
+        )
+        assert state.to_snapshot() == baseline
+
+    def test_reverse_add_drop_check(self):
+        state = SchemaState()
+        state.apply_operation(
+            {
+                "type": "create_table",
+                "table": {
+                    "name": "t",
+                    "fields": [_field("id", python_type="int", primary_key=True)],
+                    "indexes": [],
+                    "foreign_keys": [],
+                    "checks": [],
+                    "comment": None,
+                },
+            }
+        )
+        baseline = state.to_snapshot()
+
+        check = {"name": "chk_t_positive", "expression": "id > 0"}
+        state.apply_operation({"type": "add_check", "table": "t", "check": check})
+        state.apply_operation(
+            {"type": "drop_check", "table": "t", "name": check["name"]}
+        )
+        assert state.to_snapshot() == baseline
+
+    def test_reverse_rename_table(self):
+        state = SchemaState()
+        state.apply_operation(
+            {
+                "type": "create_table",
+                "table": {
+                    "name": "users",
+                    "fields": [_field("id", python_type="int", primary_key=True)],
+                    "indexes": [],
+                    "foreign_keys": [],
+                    "checks": [],
+                    "comment": None,
+                },
+            }
+        )
+        baseline = state.to_snapshot()
+
+        state.apply_operation(
+            {"type": "rename_table", "old_name": "users", "new_name": "accounts"}
+        )
+        state.apply_operation(
+            {"type": "rename_table", "old_name": "accounts", "new_name": "users"}
+        )
+        assert state.to_snapshot() == baseline
+
+    def test_reverse_rename_column(self):
+        state = SchemaState()
+        state.apply_operation(
+            {
+                "type": "create_table",
+                "table": {
+                    "name": "t",
+                    "fields": [
+                        _field("id", python_type="int", primary_key=True),
+                        _field("nickname"),
+                    ],
+                    "indexes": [],
+                    "foreign_keys": [],
+                    "checks": [],
+                    "comment": None,
+                },
+            }
+        )
+        baseline = state.to_snapshot()
+
+        state.apply_operation(
+            {
+                "type": "rename_column",
+                "table": "t",
+                "old_name": "nickname",
+                "new_name": "handle",
+            }
+        )
+        state.apply_operation(
+            {
+                "type": "rename_column",
+                "table": "t",
+                "old_name": "handle",
+                "new_name": "nickname",
+            }
+        )
+        assert state.to_snapshot() == baseline

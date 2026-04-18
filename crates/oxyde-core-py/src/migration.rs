@@ -23,7 +23,8 @@ pub(crate) fn migration_compute_diff(old_json: &str, new_json: &str) -> PyResult
         PyErr::new::<PyValueError, _>(format!("Failed to parse new snapshot: {}", e))
     })?;
 
-    let ops = compute_diff(&old, &new);
+    let ops =
+        compute_diff(&old, &new).map_err(|e| PyErr::new::<PyValueError, _>(format!("{}", e)))?;
 
     serde_json::to_string(&ops).map_err(|e| {
         PyErr::new::<PyValueError, _>(format!("Failed to serialize operations: {}", e))

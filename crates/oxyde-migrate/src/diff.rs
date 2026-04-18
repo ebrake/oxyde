@@ -1,8 +1,90 @@
 //! Schema diff computation and Migration struct.
 
+use std::collections::{HashMap, HashSet};
+
 use crate::op::MigrationOp;
-use crate::types::{Dialect, MigrateError, Result, Snapshot};
+use crate::types::{Dialect, MigrateError, Result, Snapshot, TableDef};
 use serde::{Deserialize, Serialize};
+
+/// Topologically sort table names so that referenced tables come before
+/// tables that reference them. External FK targets (not in `tables`) are
+/// ignored. Ties at the same topological level are broken alphabetically
+/// for deterministic output.
+///
+/// Returns `Err(MigrateError::DiffError)` if a FK cycle is detected — such
+/// schemas cannot be expressed as a linear CREATE TABLE sequence and require
+/// the user to break the cycle (e.g. with `nullable=True` + separate ADD FK).
+fn topo_sort_table_names(tables: &HashMap<String, TableDef>) -> Result<Vec<String>> {
+    // in_degree[t] = number of FKs from t to other tables in `tables`
+    let mut in_degree: HashMap<&str, usize> = tables.keys().map(|k| (k.as_str(), 0usize)).collect();
+
+    for (name, table) in tables {
+        for fk in &table.foreign_keys {
+            if fk.ref_table != *name && tables.contains_key(&fk.ref_table) {
+                *in_degree.get_mut(name.as_str()).unwrap() += 1;
+            }
+        }
+    }
+
+    // Kahn's algorithm with alphabetic tie-break for deterministic order
+    let mut ready: Vec<String> = in_degree
+        .iter()
+        .filter_map(|(k, &d)| if d == 0 { Some((*k).to_string()) } else { None })
+        .collect();
+    ready.sort();
+
+    let mut result = Vec::with_capacity(tables.len());
+    let mut visited: HashSet<String> = HashSet::new();
+
+    while let Some(node) = ready.pop() {
+        if !visited.insert(node.clone()) {
+            continue;
+        }
+        result.push(node.clone());
+
+        // Decrement in_degree of every table that FK-references `node`
+        let mut newly_ready: Vec<String> = Vec::new();
+        for (other_name, other_table) in tables {
+            if visited.contains(other_name) {
+                continue;
+            }
+            let count = other_table
+                .foreign_keys
+                .iter()
+                .filter(|fk| fk.ref_table == node && fk.ref_table != *other_name)
+                .count();
+            if count == 0 {
+                continue;
+            }
+            if let Some(d) = in_degree.get_mut(other_name.as_str()) {
+                *d = d.saturating_sub(count);
+                if *d == 0 {
+                    newly_ready.push(other_name.clone());
+                }
+            }
+        }
+        // Sort descending so `ready.pop()` pulls alphabetically lowest first
+        newly_ready.sort_by(|a, b| b.cmp(a));
+        ready.extend(newly_ready);
+    }
+
+    if result.len() != tables.len() {
+        let mut remaining: Vec<&str> = tables
+            .keys()
+            .filter(|k| !visited.contains(k.as_str()))
+            .map(|k| k.as_str())
+            .collect();
+        remaining.sort();
+        return Err(MigrateError::DiffError(format!(
+            "cyclic foreign key dependency among tables: {}. \
+             Break the cycle by making one FK nullable and adding it in a \
+             separate migration step.",
+            remaining.join(", ")
+        )));
+    }
+
+    Ok(result)
+}
 
 /// Migration file
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,22 +140,35 @@ impl Migration {
     }
 }
 
-/// Compute diff between two snapshots
-pub fn compute_diff(old: &Snapshot, new: &Snapshot) -> Vec<MigrationOp> {
+/// Compute diff between two snapshots.
+///
+/// Returns `Err` if either snapshot contains a foreign-key cycle.
+pub fn compute_diff(old: &Snapshot, new: &Snapshot) -> Result<Vec<MigrationOp>> {
     let mut ops = Vec::new();
 
-    // Find new tables
-    for (name, table) in &new.tables {
-        if !old.tables.contains_key(name) {
+    // Find new tables — emit in topological order so referenced tables are
+    // created before tables that reference them (critical for SQLite where FKs
+    // are inline in CREATE TABLE, and pleasant for PG/MySQL migration files).
+    let new_order = topo_sort_table_names(&new.tables)?;
+    for name in &new_order {
+        if old.tables.contains_key(name) {
+            continue;
+        }
+        if let Some(table) = new.tables.get(name) {
             ops.push(MigrationOp::CreateTable {
                 table: table.clone(),
             });
         }
     }
 
-    // Find dropped tables
-    for (name, old_table) in &old.tables {
-        if !new.tables.contains_key(name) {
+    // Find dropped tables — emit in reverse topological order so tables that
+    // reference others are dropped before the referenced ones.
+    let old_order = topo_sort_table_names(&old.tables)?;
+    for name in old_order.iter().rev() {
+        if new.tables.contains_key(name) {
+            continue;
+        }
+        if let Some(old_table) = old.tables.get(name) {
             ops.push(MigrationOp::DropTable {
                 name: name.clone(),
                 table: Some(old_table.clone()),
@@ -216,5 +311,5 @@ pub fn compute_diff(old: &Snapshot, new: &Snapshot) -> Vec<MigrationOp> {
         }
     }
 
-    ops
+    Ok(ops)
 }
