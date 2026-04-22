@@ -81,6 +81,7 @@ from pydantic import BaseModel, ConfigDict
 from pydantic._internal._model_construction import ModelMetaclass
 from pydantic.errors import PydanticUndefinedAnnotation
 from pydantic.fields import FieldInfo, PydanticUndefined
+from typing_extensions import dataclass_transform
 
 from oxyde.core import register_validator
 from oxyde.core.ir_types import get_ir_type
@@ -199,6 +200,10 @@ def _get_db_attr(field: FieldInfo, attr_name: str, default: Any = None) -> Any:
     return default
 
 
+@dataclass_transform(
+    kw_only_default=True,
+    field_specifiers=(FieldInfo, Field, OxydeFieldInfo),
+)
 class Model(BaseModel, metaclass=OxydeModelMeta):
     """Base class for Oxyde ORM models."""
 

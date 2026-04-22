@@ -166,7 +166,7 @@ class OxydeFieldInfo(FieldInfo):  # type: ignore[misc]
 def Field(
     default: Any = PydanticUndefined,
     **kwargs: Any,
-) -> OxydeFieldInfo:
+) -> Any:
     """Create Oxyde field with Pydantic and database metadata.
 
     Combines Pydantic validation (ge, le, alias, etc.) with database metadata

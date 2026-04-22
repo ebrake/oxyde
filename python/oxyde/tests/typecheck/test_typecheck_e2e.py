@@ -70,3 +70,63 @@ def test_mypy_accepts_generated_stubs(
         f"--- STDOUT ---\n{result.stdout}\n"
         f"--- STDERR ---\n{result.stderr}"
     )
+
+
+# Per-fixture marks for the model-source check. ``mixed_module`` calls
+# ``Note.objects.all()`` from inside the model file itself, which exercises
+# QueryManager/Query typing rather than the Field-assignment fix this suite
+# is about. Stubs cover the cross-module case; in-file manager calls remain
+# untyped until QueryManager/Query gain proper Generic[TModel] propagation.
+_MODEL_SOURCE_XFAIL = {
+    "edges/mixed_module": pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "QueryManager.all() declared as Coroutine[..., bytes | list[Any]] "
+            "and Model.objects is ClassVar[QueryManager] without TModel. "
+            "Stubs cover cross-module imports; in-file Model.objects.xxx() "
+            "calls require Generic[TModel] propagation through the manager, "
+            "Query and ExecutionMixin. Tracked as a follow-up to issue #13."
+        ),
+    ),
+}
+
+
+def _model_source_params() -> list:
+    params = []
+    for test_id, fixture_dir, model_module, usage_file in FIXTURES:
+        marks = (_MODEL_SOURCE_XFAIL[test_id],) if test_id in _MODEL_SOURCE_XFAIL else ()
+        params.append(
+            pytest.param(fixture_dir, model_module, usage_file, id=test_id, marks=marks)
+        )
+    return params
+
+
+@pytest.mark.parametrize(
+    ("fixture_dir", "model_module", "usage_file"),
+    _model_source_params(),
+)
+def test_mypy_accepts_model_source(
+    fixture_dir: str,
+    model_module: str,
+    usage_file: str,
+    generate_stubs,
+) -> None:
+    """Mypy must accept the model source file itself, not just the usage stub.
+
+    Reproduces issue #13: pyright/ty (and mypy without the pydantic plugin)
+    flag every ``field: T = Field(...)`` assignment because ``Field()`` returns
+    ``OxydeFieldInfo`` rather than ``Any``. The existing typecheck e2e only
+    runs mypy on the usage file, which resolves through the generated ``.pyi``
+    and hides the problem.
+    """
+    source_dir = FIXTURES_DIR / fixture_dir
+    work_dir = generate_stubs(source_dir, model_module)
+    model_path = work_dir / f"{model_module}.py"
+    assert model_path.exists(), f"model fixture missing: {model_path}"
+
+    result = _run_mypy(model_path, work_dir)
+    assert result.returncode == 0, (
+        f"mypy failed for fixture '{fixture_dir}':\n"
+        f"--- STDOUT ---\n{result.stdout}\n"
+        f"--- STDERR ---\n{result.stderr}"
+    )
