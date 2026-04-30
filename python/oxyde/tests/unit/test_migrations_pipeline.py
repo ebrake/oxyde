@@ -282,3 +282,147 @@ class TestIndexPipeline:
         assert any(
             "CREATE" in s.upper() and "idx_users_email" in s for s in down_sql
         )
+
+
+class TestCyclicForeignKeys:
+    """Cycles only matter when the affected tables are actually being created
+    or dropped. For unchanged tables the topo-sort is irrelevant. The diff
+    planner must therefore restrict its topo-sort to the create/drop subset,
+    not the entire snapshot.
+    """
+
+    @pytest.mark.parametrize("dialect", ALL_DIALECTS)
+    def test_noop_diff_on_cyclic_schema(self, dialect):
+        class Company(Model):
+            id: int | None = Field(default=None, db_pk=True)
+            user: User | None = Field(default=None, db_on_delete="NO ACTION")
+
+            class Meta:
+                is_table = True
+                table_name = "companies"
+
+        class User(Model):
+            id: int | None = Field(default=None, db_pk=True)
+            company: Company | None = Field(default=None, db_on_delete="NO ACTION")
+
+            class Meta:
+                is_table = True
+                table_name = "users"
+
+        snap = _snapshot_from_models([Company, User], dialect)
+        ops_json = migration_compute_diff(json.dumps(snap), json.dumps(snap))
+        ops = json.loads(ops_json)
+        assert ops == [], (
+            f"no-op diff on cyclic schema must produce no operations, got {ops}"
+        )
+
+    @pytest.mark.parametrize("dialect", ALL_DIALECTS)
+    def test_add_column_in_cyclic_schema(self, tmp_path, dialect):
+        class CompanyV1(Model):
+            id: int | None = Field(default=None, db_pk=True)
+            user: UserV1 | None = Field(default=None, db_on_delete="NO ACTION")
+
+            class Meta:
+                is_table = True
+                table_name = "companies"
+
+        class UserV1(Model):
+            id: int | None = Field(default=None, db_pk=True)
+            company: CompanyV1 | None = Field(default=None, db_on_delete="NO ACTION")
+
+            class Meta:
+                is_table = True
+                table_name = "users"
+
+        class CompanyV2(Model):
+            id: int | None = Field(default=None, db_pk=True)
+            user: UserV2 | None = Field(default=None, db_on_delete="NO ACTION")
+            name: str | None = Field(default=None, db_nullable=True)
+
+            class Meta:
+                is_table = True
+                table_name = "companies"
+
+        class UserV2(Model):
+            id: int | None = Field(default=None, db_pk=True)
+            company: CompanyV2 | None = Field(default=None, db_on_delete="NO ACTION")
+
+            class Meta:
+                is_table = True
+                table_name = "users"
+
+        ops, up_sql, _ = _run_pipeline(
+            [CompanyV1, UserV1],
+            [CompanyV2, UserV2],
+            dialect,
+            tmp_path,
+            "add_company_name",
+        )
+
+        add_columns = [op for op in ops if op["type"] == "add_column"]
+        assert len(add_columns) == 1, (
+            f"expected exactly one AddColumn, got {ops}"
+        )
+        assert add_columns[0]["table"] == "companies"
+        assert add_columns[0]["field"]["name"] == "name"
+        assert any(
+            "ADD" in s.upper() and "name" in s.lower() for s in up_sql
+        )
+
+    @pytest.mark.parametrize("dialect", ALL_DIALECTS)
+    def test_create_table_referencing_cyclic_subset(self, tmp_path, dialect):
+        class CompanyV1(Model):
+            id: int | None = Field(default=None, db_pk=True)
+            user: UserV1 | None = Field(default=None, db_on_delete="NO ACTION")
+
+            class Meta:
+                is_table = True
+                table_name = "companies"
+
+        class UserV1(Model):
+            id: int | None = Field(default=None, db_pk=True)
+            company: CompanyV1 | None = Field(default=None, db_on_delete="NO ACTION")
+
+            class Meta:
+                is_table = True
+                table_name = "users"
+
+        class CompanyV2(Model):
+            id: int | None = Field(default=None, db_pk=True)
+            user: UserV2 | None = Field(default=None, db_on_delete="NO ACTION")
+
+            class Meta:
+                is_table = True
+                table_name = "companies"
+
+        class UserV2(Model):
+            id: int | None = Field(default=None, db_pk=True)
+            company: CompanyV2 | None = Field(default=None, db_on_delete="NO ACTION")
+
+            class Meta:
+                is_table = True
+                table_name = "users"
+
+        class OrderV2(Model):
+            id: int | None = Field(default=None, db_pk=True)
+            user: UserV2 | None = Field(default=None, db_on_delete="NO ACTION")
+
+            class Meta:
+                is_table = True
+                table_name = "orders"
+
+        ops, up_sql, _ = _run_pipeline(
+            [CompanyV1, UserV1],
+            [CompanyV2, UserV2, OrderV2],
+            dialect,
+            tmp_path,
+            "add_orders_table",
+        )
+
+        create_tables = [
+            op["table"]["name"] for op in ops if op["type"] == "create_table"
+        ]
+        assert create_tables == ["orders"], (
+            f"expected exactly one CreateTable(orders), got {ops}"
+        )
+        assert any("CREATE TABLE" in s.upper() and "orders" in s for s in up_sql)

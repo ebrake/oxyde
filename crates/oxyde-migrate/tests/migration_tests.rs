@@ -1184,3 +1184,140 @@ fn test_compute_diff_emits_drop_tables_in_reverse_topological_order() {
         "DropTable ops must be in reverse topological order (referencing tables first)"
     );
 }
+
+// Helper: build a table with a primary key and an arbitrary list of FK refs.
+// Used by the cyclic-schema tests below.
+fn cyclic_table(name: &str, fk_refs: &[(&str, &str)]) -> TableDef {
+    let mut fields = vec![FieldDef {
+        name: "id".into(),
+        python_type: "int".into(),
+        db_type: None,
+        nullable: false,
+        primary_key: true,
+        unique: true,
+        default: None,
+        auto_increment: false,
+        max_length: None,
+        max_digits: None,
+        decimal_places: None,
+    }];
+    let mut foreign_keys = Vec::new();
+    for (col, ref_table) in fk_refs {
+        fields.push(FieldDef {
+            name: (*col).to_string(),
+            python_type: "int".into(),
+            db_type: None,
+            nullable: true,
+            primary_key: false,
+            unique: false,
+            default: None,
+            auto_increment: false,
+            max_length: None,
+            max_digits: None,
+            decimal_places: None,
+        });
+        foreign_keys.push(ForeignKeyDef {
+            name: format!("fk_{}_{}", name, col),
+            columns: vec![(*col).to_string()],
+            ref_table: (*ref_table).to_string(),
+            ref_columns: vec!["id".into()],
+            on_delete: Some("NO ACTION".into()),
+            on_update: Some("NO ACTION".into()),
+        });
+    }
+    TableDef {
+        name: name.to_string(),
+        fields,
+        indexes: vec![],
+        foreign_keys,
+        checks: vec![],
+        comment: None,
+    }
+}
+
+#[test]
+fn test_compute_diff_noop_on_cyclic_schema() {
+    // when old == new and the schema contains a
+    // mutual-FK cycle, compute_diff must return [] instead of erroring out
+    // on the topological sort. Cycle is only a problem when tables actually
+    // need to be created/dropped — for unchanged tables it's irrelevant.
+    let mut snap = Snapshot::new();
+    snap.add_table(cyclic_table("companies", &[("user_id", "users")]));
+    snap.add_table(cyclic_table("users", &[("company_id", "companies")]));
+
+    let ops =
+        compute_diff(&snap, &snap).expect("no-op diff on cyclic schema must succeed, not error");
+    assert!(
+        ops.is_empty(),
+        "no-op diff must produce zero operations, got {:?}",
+        ops
+    );
+}
+
+#[test]
+fn test_compute_diff_modify_column_in_cyclic_schema() {
+    // old and new both contain the same mutual-FK cycle; new adds an extra
+    // column to one of the cyclic tables. Diff must produce just the
+    // AddColumn operation, not an error.
+    let mut old = Snapshot::new();
+    old.add_table(cyclic_table("companies", &[("user_id", "users")]));
+    old.add_table(cyclic_table("users", &[("company_id", "companies")]));
+
+    let mut new = Snapshot::new();
+    let mut companies_v2 = cyclic_table("companies", &[("user_id", "users")]);
+    companies_v2.fields.push(sample_field("name"));
+    new.add_table(companies_v2);
+    new.add_table(cyclic_table("users", &[("company_id", "companies")]));
+
+    let ops = compute_diff(&old, &new).expect("modification on cyclic schema must succeed");
+
+    let add_columns: Vec<&str> = ops
+        .iter()
+        .filter_map(|op| match op {
+            MigrationOp::AddColumn { table, field } if table == "companies" => {
+                Some(field.name.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        add_columns,
+        vec!["name"],
+        "expected exactly one AddColumn(companies.name), got ops={:?}",
+        ops
+    );
+}
+
+#[test]
+fn test_compute_diff_create_table_referencing_cyclic_subset() {
+    // old already contains a cyclic pair (companies <-> users). new adds a
+    // third table (orders) that references users via FK. The CREATE subset
+    // is just {orders} and is acyclic, so diff must succeed and emit a
+    // CreateTable for orders. FKs from orders to the existing 'users' must
+    // be ignored by the topo-sort because users is not in the create subset.
+    let mut old = Snapshot::new();
+    old.add_table(cyclic_table("companies", &[("user_id", "users")]));
+    old.add_table(cyclic_table("users", &[("company_id", "companies")]));
+
+    let mut new = Snapshot::new();
+    new.add_table(cyclic_table("companies", &[("user_id", "users")]));
+    new.add_table(cyclic_table("users", &[("company_id", "companies")]));
+    new.add_table(cyclic_table("orders", &[("user_id", "users")]));
+
+    let ops = compute_diff(&old, &new)
+        .expect("creating an acyclic table on top of a cyclic schema must succeed");
+
+    let create_names: Vec<&str> = ops
+        .iter()
+        .filter_map(|op| match op {
+            MigrationOp::CreateTable { table } => Some(table.name.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        create_names,
+        vec!["orders"],
+        "expected exactly one CreateTable(orders), got ops={:?}",
+        ops
+    );
+}

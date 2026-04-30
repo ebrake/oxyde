@@ -142,33 +142,43 @@ impl Migration {
 
 /// Compute diff between two snapshots.
 ///
-/// Returns `Err` if either snapshot contains a foreign-key cycle.
+/// Returns `Err` only when the create- or drop-subset itself contains a
+/// foreign-key cycle (i.e. the cycle blocks linear CREATE/DROP ordering).
+/// Cycles among unchanged tables are irrelevant and pass through silently.
 pub fn compute_diff(old: &Snapshot, new: &Snapshot) -> Result<Vec<MigrationOp>> {
     let mut ops = Vec::new();
 
-    // Find new tables — emit in topological order so referenced tables are
-    // created before tables that reference them (critical for SQLite where FKs
-    // are inline in CREATE TABLE, and pleasant for PG/MySQL migration files).
-    let new_order = topo_sort_table_names(&new.tables)?;
+    // Topo-sort only the subset of tables that are actually being created.
+    // FKs from this subset to tables that already exist in `old` are not
+    // edges in the create-ordering graph (the targets exist regardless of
+    // when this migration runs), and `topo_sort_table_names` already
+    // ignores refs to tables outside the input map.
+    let new_to_create: HashMap<String, TableDef> = new
+        .tables
+        .iter()
+        .filter(|(name, _)| !old.tables.contains_key(*name))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let new_order = topo_sort_table_names(&new_to_create)?;
     for name in &new_order {
-        if old.tables.contains_key(name) {
-            continue;
-        }
-        if let Some(table) = new.tables.get(name) {
+        if let Some(table) = new_to_create.get(name) {
             ops.push(MigrationOp::CreateTable {
                 table: table.clone(),
             });
         }
     }
 
-    // Find dropped tables — emit in reverse topological order so tables that
-    // reference others are dropped before the referenced ones.
-    let old_order = topo_sort_table_names(&old.tables)?;
+    // Topo-sort only the subset of tables that are actually being dropped,
+    // then emit in reverse so referencing tables go before referenced ones.
+    let old_to_drop: HashMap<String, TableDef> = old
+        .tables
+        .iter()
+        .filter(|(name, _)| !new.tables.contains_key(*name))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let old_order = topo_sort_table_names(&old_to_drop)?;
     for name in old_order.iter().rev() {
-        if new.tables.contains_key(name) {
-            continue;
-        }
-        if let Some(old_table) = old.tables.get(name) {
+        if let Some(old_table) = old_to_drop.get(name) {
             ops.push(MigrationOp::DropTable {
                 name: name.clone(),
                 table: Some(old_table.clone()),
