@@ -92,10 +92,13 @@ fn like_target(col: Expr, spec: &ColumnTypeSpec, dialect: Dialect) -> Expr {
         Dialect::Mysql => "JSON_UNQUOTE({col})",
         // SQLite does not validate JSON columns, and json_type() raises on
         // text that is not JSON, so it is checked first. Flags 9 accept
-        // RFC 8259 text (1) and strictly valid JSONB blobs (8).
+        // RFC 8259 text (1) and strictly valid JSONB blobs (8). Other JSONB
+        // values match their JSON text; JSON text is left as stored.
         Dialect::Sqlite => {
             "CASE WHEN json_valid({col}, 9) THEN CASE json_type({col}) \
-             WHEN 'text' THEN json_extract({col}, '$') ELSE {col} END ELSE {col} END"
+             WHEN 'text' THEN json_extract({col}, '$') \
+             ELSE CASE WHEN json_valid({col}, 8) THEN json({col}) ELSE {col} END END \
+             ELSE {col} END"
         }
     };
     Expr::expr(render_col(template, &col.into(), dialect))

@@ -239,6 +239,10 @@ fn postgres_json_db_type_casts_the_column_to_jsonb() {
     let mut lookup = Lookup::new("ARRAY_OVERLAP", arr(vec![1.into()]), ColumnTypeSpec::Json);
     lookup.db_type = Some("JSON");
     let (sql, _) = lookup.build(Dialect::Postgres);
+    assert!(
+        sql.contains(r#"CASE WHEN "tags" IS NULL THEN NULL"#),
+        "{sql}"
+    );
     assert!(sql.contains(r#"jsonb_typeof(("tags")::jsonb)"#), "{sql}");
     assert!(
         sql.contains(r#"(SELECT ("tags")::jsonb AS "__oxyde_c") AS "__oxyde_h""#),
@@ -672,7 +676,7 @@ fn like_on_json_columns_matches_the_unquoted_string() {
         let (sql, _) = case_sensitive.build(Dialect::Sqlite);
         assert!(
             sql.contains(
-                r#"(CASE WHEN json_valid("tags", 9) THEN CASE json_type("tags") WHEN 'text' THEN json_extract("tags", '$') ELSE "tags" END ELSE "tags" END) LIKE ?"#
+                r#"(CASE WHEN json_valid("tags", 9) THEN CASE json_type("tags") WHEN 'text' THEN json_extract("tags", '$') ELSE CASE WHEN json_valid("tags", 8) THEN json("tags") ELSE "tags" END END ELSE "tags" END) LIKE ?"#
             ),
             "{sql}"
         );

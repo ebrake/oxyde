@@ -293,15 +293,17 @@ async fn like_on_json_columns_reads_jsonb_strings() {
     // A JSON string as text and as JSONB, and text that is not JSON.
     execute_statement(
         &pool,
-        "INSERT INTO items (id, doc) VALUES (4, '\"hello\"'), (5, jsonb('\"hello\"')), (6, 'hello')",
+        "INSERT INTO items (id, doc) VALUES (4, '\"hello\"'), (5, jsonb('\"hello\"')), (6, 'hello'), \
+         (7, jsonb('{\"k\":\"v\"}'))",
         &[],
     )
     .await
     .unwrap();
 
     assert_eq!(select_ids(&pool, "doc", "LIKE", s("hel%")).await, [4, 5, 6]);
-    // Arrays and objects still match their JSON text.
-    assert_eq!(select_ids(&pool, "doc", "LIKE", s("{%")).await, [3]);
+    // Arrays and objects still match their JSON text, JSONB ones included.
+    assert_eq!(select_ids(&pool, "doc", "LIKE", s("{%")).await, [3, 7]);
+    assert_eq!(select_ids(&pool, "doc", "LIKE", s("%\"k\"%")).await, [7]);
 
     close_pool(&pool).await.unwrap();
 }

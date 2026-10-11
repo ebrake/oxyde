@@ -137,11 +137,28 @@ pub(crate) fn parse_decimal_exact(s: &str) -> Option<Decimal> {
         // `str(Decimal)` of a zero with 30 places), but `from_scientific`
         // rejects any exponent beyond ±28.
         Some(exponent) if mantissa.is_zero() => exponent.parse::<i64>().ok().map(|_| Decimal::ZERO),
-        // The mantissa now parses exactly, and without trailing zeros it
-        // leaves the exponent the most room ("1.500E-27"); an exponent that
-        // still does not fit is an error there, not a rounding.
+        // Scaled by hand: `from_scientific` rejects any exponent beyond ±28
+        // before scaling, though "100E-29" and "0.001E+30" are exact.
         Some(exponent) => {
-            Decimal::from_scientific(&format!("{}e{exponent}", mantissa.normalize())).ok()
+            let mantissa = mantissa.normalize();
+            let mut digits = mantissa.mantissa();
+            let mut scale = i64::from(mantissa.scale()) - exponent.parse::<i64>().ok()?;
+            // Integer trailing zeros make room for the exponent ("100E-29").
+            while scale > i64::from(Decimal::MAX_SCALE) && digits % 10 == 0 {
+                digits /= 10;
+                scale -= 1;
+            }
+            if scale < 0 {
+                let power = 10i128.checked_pow(u32::try_from(-scale).ok()?)?;
+                digits = digits.checked_mul(power)?;
+                scale = 0;
+            }
+            // More fractional digits than a Decimal holds is an error, not a
+            // rounding; so is a value beyond 96 bits.
+            let scale = u32::try_from(scale)
+                .ok()
+                .filter(|&s| s <= Decimal::MAX_SCALE)?;
+            Decimal::try_from_i128_with_scale(digits, scale).ok()
         }
         None => Some(mantissa),
     }
@@ -681,6 +698,31 @@ mod tests {
             bind_value(&s("0E-30"), &decimal_spec()),
             Value::Decimal(Some(Box::new(Decimal::ZERO)))
         );
+    }
+
+    #[test]
+    fn exact_decimals_with_any_exponent() {
+        let tiny = Decimal::new(1, 27);
+        let huge = Decimal::from_i128_with_scale(10i128.pow(27), 0);
+        for (text, expected) in [
+            ("100E-29", tiny),
+            ("1000E-30", tiny),
+            ("1.500E-27", Decimal::new(15, 28)),
+            ("0.001E+30", huge),
+            ("1E+2", Decimal::from(100)),
+        ] {
+            assert_eq!(parse_decimal_exact(text), Some(expected), "{text}");
+        }
+        // Would round, or overflow 96 bits.
+        for text in [
+            "1E-29",
+            "1.001E-28",
+            "1E+29",
+            "8E+28",
+            "1E-99999999999999999999",
+        ] {
+            assert_eq!(parse_decimal_exact(text), None, "{text}");
+        }
     }
 
     #[test]

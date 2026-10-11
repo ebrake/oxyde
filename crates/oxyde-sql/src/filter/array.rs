@@ -494,9 +494,11 @@ fn postgres_json(col: &SimpleExpr, op: ArrayOp, operand: &Value, cast_column: bo
     let eq = r#""__oxyde_l"."__oxyde_v" = "__oxyde_r"."__oxyde_v""#;
     let body = pg_hold(doc, &set_predicate(op, &left, &right, eq));
     // CASE, not AND: PostgreSQL does not promise to evaluate the type check
-    // first, and jsonb_array_elements raises on scalars and objects.
+    // first, and jsonb_array_elements raises on scalars and objects. The
+    // NULL check reads the column itself: a `json` column is NULL exactly
+    // when its jsonb cast is, so it need not be cast.
     let guarded = format!(
-        "CASE WHEN {doc} IS NULL THEN NULL \
+        "CASE WHEN {{col}} IS NULL THEN NULL \
          WHEN jsonb_typeof({doc}) = 'array' THEN {body} ELSE FALSE END"
     );
     let sql = if op == ArrayOp::Contains {
