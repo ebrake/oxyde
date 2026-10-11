@@ -48,28 +48,34 @@ fn resolve_col_spec<'a>(
         .unwrap_or(&ColumnTypeSpec::Unknown)
 }
 
-/// `typed_value_expr`, plus the PostgreSQL cast of an array value to the
-/// column's `db_type` override: an `INTEGER[]` column has no `=` with the
-/// `bigint[]` the value binds as. Overrides that array lookups cannot read
-/// either (`INT[][]`) keep the plain value, as before.
+/// PostgreSQL array type that a filter's array values are cast to: the
+/// column's `db_type` override, since an `INTEGER[]` column has no `=` with
+/// the `bigint[]` the value binds as. Overrides that array lookups cannot
+/// read either (`INT[][]`) keep the plain value, as before.
+fn pg_array_cast(spec: &ColumnTypeSpec, db_type: Option<&str>, dialect: Dialect) -> Option<String> {
+    match (dialect, spec, db_type) {
+        (Dialect::Postgres, ColumnTypeSpec::Array { item }, Some(db_type))
+            if db_type.trim().ends_with("[]") =>
+        {
+            pg_array_type(item, Some(db_type)).ok()
+        }
+        _ => None,
+    }
+}
+
+/// `typed_value_expr`, plus the `pg_array_cast` of an array value.
 fn filter_value_expr(
     value: Value,
     spec: &ColumnTypeSpec,
-    db_type: Option<&str>,
+    array_cast: Option<&str>,
     dialect: Dialect,
 ) -> Result<SimpleExpr> {
-    if let (Dialect::Postgres, ColumnTypeSpec::Array { item }, Some(db_type), Value::Array(..)) =
-        (dialect, spec, db_type, &value)
-    {
-        if db_type.trim().ends_with("[]") {
-            if let Ok(array_type) = pg_array_type(item, Some(db_type)) {
-                check_pg_operand_range(&value, &array_type)?;
-                return Ok(Expr::cust_with_values(
-                    format!("$1::{array_type}"),
-                    vec![value],
-                ));
-            }
-        }
+    if let (Some(array_type), Value::Array(..)) = (array_cast, &value) {
+        check_pg_operand_range(&value, array_type)?;
+        return Ok(Expr::cust_with_values(
+            format!("$1::{array_type}"),
+            vec![value],
+        ));
     }
     Ok(typed_value_expr(value, spec, dialect))
 }
@@ -218,8 +224,9 @@ fn apply_filter(
         make_col_expr(col_name, default_table)
     };
 
-    let db_type = filter.db_type.as_deref();
-    let typed = |value: Value| filter_value_expr(value, spec, db_type, dialect);
+    // Resolved once: an IN list would otherwise reparse db_type per value.
+    let array_cast = pg_array_cast(spec, filter.db_type.as_deref(), dialect);
+    let typed = |value: Value| filter_value_expr(value, spec, array_cast.as_deref(), dialect);
     let val = bind_value(&filter.value, spec);
 
     let expr = match filter.operator.as_str() {

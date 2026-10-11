@@ -64,9 +64,12 @@ pub(crate) struct Operand {
 
 impl Operand {
     pub(crate) fn parse(text: &str, mode: ItemMode) -> Result<Self, String> {
-        let set = canonical_set(text, mode)
+        let mut set = canonical_items(text, mode)
             .map_err(|e| format!("operand: {e}"))?
             .ok_or_else(|| "operand must be a JSON array".to_string())?;
+        // Sorted and de-duplicated once, for the binary searches in `matches`.
+        set.sort();
+        set.dedup();
         Ok(Self { mode, set })
     }
 
@@ -75,15 +78,23 @@ impl Operand {
     /// all: SQLite does not validate JSON columns, and Oxyde itself stores a
     /// `str` that is not JSON as is.
     pub(crate) fn matches(&self, stored: &str, op: MatchOp) -> bool {
-        let Ok(Some(stored)) = canonical_set(stored, self.mode) else {
+        let Ok(Some(stored)) = canonical_items(stored, self.mode) else {
             return false;
         };
-        let operand = &self.set;
+        // Each stored element is looked up in the sorted operand, so the
+        // stored array is never sorted.
+        let position = |e: &Canon| self.set.binary_search(e).ok();
 
         match op {
-            MatchOp::Contains => is_subset(operand, &stored),
-            MatchOp::ContainedBy => is_subset(&stored, operand),
-            MatchOp::Overlap => operand.iter().any(|e| stored.binary_search(e).is_ok()),
+            MatchOp::Contains => {
+                let mut found = vec![false; self.set.len()];
+                for i in stored.iter().filter_map(position) {
+                    found[i] = true;
+                }
+                found.into_iter().all(|f| f)
+            }
+            MatchOp::ContainedBy => stored.iter().all(|e| position(e).is_some()),
+            MatchOp::Overlap => stored.iter().any(|e| position(e).is_some()),
         }
     }
 }
@@ -94,17 +105,12 @@ fn array_match(stored: &str, operand: &str, op: MatchOp, mode: ItemMode) -> Resu
     Ok(Operand::parse(operand, mode)?.matches(stored, op))
 }
 
-/// Every element of `needles` appears in `haystack` (both sorted).
-fn is_subset(needles: &[Canon], haystack: &[Canon]) -> bool {
-    needles.iter().all(|e| haystack.binary_search(e).is_ok())
-}
-
-/// Sorted, de-duplicated canonical elements; `None` for a non-array.
+/// Canonical elements, in stored order; `None` for a non-array.
 ///
 /// Each value is parsed once here; nested containers are re-read once per
 /// level by `canonical`, since keeping number lexemes in a single pass would
 /// need serde_json's `arbitrary_precision`, which changes numbers crate-wide.
-fn canonical_set(text: &str, mode: ItemMode) -> Result<Option<Vec<Canon>>, String> {
+fn canonical_items(text: &str, mode: ItemMode) -> Result<Option<Vec<Canon>>, String> {
     let invalid = |e: serde_json::Error| format!("invalid JSON: {e}");
     if !text.trim_start().starts_with('[') {
         // Still validated: text that is not JSON at all is an error.
@@ -113,17 +119,15 @@ fn canonical_set(text: &str, mode: ItemMode) -> Result<Option<Vec<Canon>>, Strin
         return Ok(None);
     }
     let items: Vec<&RawValue> = serde_json::from_str(text).map_err(invalid)?;
-    let mut set = items
+    items
         .into_iter()
         .map(|item| canonical(item, mode))
-        .collect::<Result<Vec<_>, _>>()?;
-    set.sort();
-    set.dedup();
-    Ok(Some(set))
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
 }
 
 /// Canonical JSON value. The derived ordering is arbitrary but total, which
-/// is all sorting and de-duplication need.
+/// is all sorting, de-duplication and binary search need.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum Canon {
     Null,
@@ -239,6 +243,8 @@ mod tests {
     fn set_semantics_ignore_order_and_duplicates() {
         assert!(check("[1, 2, 2, 3]", "[3, 1, 1]", MatchOp::Contains));
         assert!(!check("[1, 2]", "[1, 4]", MatchOp::Contains));
+        // Repeats of one operand element do not stand in for another.
+        assert!(!check("[1, 1, 1]", "[1, 2]", MatchOp::Contains));
         assert!(check("[2, 1, 1]", "[1, 2, 3]", MatchOp::ContainedBy));
         assert!(!check("[1, 5]", "[1, 2, 3]", MatchOp::ContainedBy));
         assert!(check("[1, 5]", "[5, 9]", MatchOp::Overlap));

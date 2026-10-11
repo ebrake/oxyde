@@ -137,6 +137,11 @@ def _lookup_category(meta: ColumnMeta) -> str:
     return desc.category if desc is not None else "generic"
 
 
+# Default for a ``spec`` argument that was not passed: None is a real spec
+# value (a field without a column type), so it cannot mark "not given".
+_UNSET: Any = object()
+
+
 def _field_spec(model_class: type[Model], meta: ColumnMeta) -> dict[str, Any] | None:
     """ColumnTypeSpec of a field, from its model's cached column_types."""
     cached = model_class._db_meta.column_types
@@ -145,38 +150,32 @@ def _field_spec(model_class: type[Model], meta: ColumnMeta) -> dict[str, Any] | 
     return column_type_for_meta(meta)
 
 
-def _array_lookup_spec(
-    meta: ColumnMeta, spec: dict[str, Any] | None
-) -> dict[str, Any] | None:
-    """Column spec when the field supports array lookups, else None.
+def _supports_array_lookups(meta: ColumnMeta, spec: dict[str, Any] | None) -> bool:
+    """Whether the field supports array lookups.
 
     ``spec`` is the field's ColumnTypeSpec (``_field_spec``). Typed arrays
     (``list[T]``) and JSON columns qualify. Nested typed arrays
     (``list[list[T]]``) do not: they have no array lookup semantics on
     PostgreSQL; store them in a JSON column instead.
     """
-    if _lookup_category(meta) not in ("generic", "string"):
-        return None
-    if spec is None:
-        return None
+    if _lookup_category(meta) not in ("generic", "string") or spec is None:
+        return False
     kind = spec.get("kind")
     if kind == "array":
         item = spec.get("item") or {}
-        return None if item.get("kind") == "array" else spec
-    if kind in ("json", "json_binary"):
-        return spec
-    return None
+        return item.get("kind") != "array"
+    return kind in ("json", "json_binary")
 
 
 def _allowed_lookups_for_meta(
-    meta: ColumnMeta, spec: dict[str, Any] | None = None
+    meta: ColumnMeta, spec: dict[str, Any] | None = _UNSET
 ) -> list[str]:
     """Get list of allowed lookups for a given field metadata.
 
     Pass the field's ``spec`` (``_field_spec``) when it is at hand; otherwise
     it is computed from ``meta``.
     """
-    if spec is None:
+    if spec is _UNSET:
         spec = column_type_for_meta(meta)
     category = _lookup_category(meta)
     lookups: list[str] = ["exact"]
@@ -197,7 +196,7 @@ def _allowed_lookups_for_meta(
         lookups.extend(BOOL_LOOKUPS)
     else:
         lookups.extend(GENERIC_LOOKUPS)
-    if _array_lookup_spec(meta, spec) is not None:
+    if _supports_array_lookups(meta, spec):
         lookups.extend(ARRAY_LOOKUPS)
     lookups.extend(COMMON_LOOKUPS)
     # Deduplicate while preserving order
@@ -380,7 +379,7 @@ def _build_lookup_conditions(
     lookup: str,
     value: Any,
     column_meta: ColumnMeta,
-    spec: dict[str, Any] | None = None,
+    spec: dict[str, Any] | None = _UNSET,
 ) -> list[Condition]:
     """Build query conditions for a given field lookup.
 
@@ -389,13 +388,13 @@ def _build_lookup_conditions(
     db_type, which PostgreSQL casts values and operands to
     (db_type="INTEGER[]"), for every operator.
     """
-    if spec is None:
+    if spec is _UNSET:
         spec = _field_spec(model_class, column_meta)
-    array_spec = _array_lookup_spec(column_meta, spec)
+    array_lookups = _supports_array_lookups(column_meta, spec)
     conditions = _lookup_conditions(
-        field_name, lookup or "exact", value, column_meta, array_spec
+        field_name, lookup or "exact", value, column_meta, array_lookups
     )
-    if array_spec is not None and column_meta.db_type is not None:
+    if array_lookups and column_meta.db_type is not None:
         for cond in conditions:
             cond.db_type = column_meta.db_type
     return conditions
@@ -406,16 +405,18 @@ def _lookup_conditions(
     lookup: str,
     value: Any,
     column_meta: ColumnMeta,
-    array_spec: dict[str, Any] | None,
+    array_lookups: bool,
 ) -> list[Condition]:
     """Conditions for one lookup, without the db_type cast."""
     db_column = column_meta.db_column
 
     if lookup in ARRAY_LOOKUPS and _is_array_lookup(
-        lookup, value, column_meta, array_spec
+        lookup, value, column_meta, array_lookups
     ):
         return [
-            _build_array_condition(field_name, lookup, value, column_meta, array_spec)
+            _build_array_condition(
+                field_name, lookup, value, column_meta, array_lookups
+            )
         ]
 
     if lookup == "exact":
@@ -540,17 +541,17 @@ def _lookup_conditions(
 
 
 def _is_array_lookup(
-    lookup: str, value: Any, meta: ColumnMeta, array_spec: dict[str, Any] | None
+    lookup: str, value: Any, meta: ColumnMeta, array_lookups: bool
 ) -> bool:
     """Whether a contains/contained_by/overlap lookup filters an array.
 
-    ``array_spec`` is the field's ``_array_lookup_spec``. ``contains`` keeps
+    ``array_lookups`` is the field's ``_supports_array_lookups``. ``contains`` keeps
     its LIKE meaning for a string value on a str field, including str fields
     stored as JSON.
     """
     if lookup != "contains":
         return True
-    if array_spec is None:
+    if not array_lookups:
         return False
     return not (isinstance(value, str) and _lookup_category(meta) == "string")
 
@@ -560,17 +561,17 @@ def _build_array_condition(
     lookup: str,
     value: Any,
     meta: ColumnMeta,
-    array_spec: dict[str, Any] | None,
+    array_lookups: bool,
 ) -> Condition:
     """Build an array containment/overlap condition.
 
-    ``array_spec`` is the field's ``_array_lookup_spec``. Matching is done by
+    ``array_lookups`` is the field's ``_supports_array_lookups``. Matching is done by
     the database: Rust validates the operand against the column's spec (from
     the query's column_types) and picks the dialect's SQL.
     ``_build_lookup_conditions`` adds the field's db_type for the PostgreSQL
     operand cast.
     """
-    if array_spec is None:
+    if not array_lookups:
         raise FieldLookupError(
             f"Lookup '{lookup}' requires an array or JSON field, "
             f"got '{field_name}' of type {meta.python_type}"
@@ -693,7 +694,7 @@ __all__ = [
     "ResolvedPath",
     "_lookup_category",
     "_field_spec",
-    "_array_lookup_spec",
+    "_supports_array_lookups",
     "_allowed_lookups_for_meta",
     "_split_lookup_key",
     "_parse_lookup_path",

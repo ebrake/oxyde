@@ -439,6 +439,12 @@ class TestArrayLookups:
         )
         assert {"icontains", "startswith", "contained_by", "overlap"} <= set(allowed)
 
+    def test_explicit_none_spec_is_not_recomputed(self):
+        # None is a real spec (a field without a column type), not "not given".
+        meta = _resolve_column_meta(ArrayLookupModel, "tags")
+        assert "overlap" in _allowed_lookups_for_meta(meta)
+        assert "overlap" not in _allowed_lookups_for_meta(meta, None)
+
     @pytest.mark.parametrize(
         ("lookup", "operator"),
         [

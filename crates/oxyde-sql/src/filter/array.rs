@@ -12,9 +12,9 @@
 //!   `IS NOT DISTINCT FROM`.
 //! - PostgreSQL JSON columns enumerate `jsonb_array_elements` and compare
 //!   whole jsonb values.
-//! - MySQL walks both arrays with `JSON_TABLE ... FOR ORDINALITY` and compares
-//!   `JSON_EXTRACT`ed elements as JSON values. (A `JSON PATH '$'` column would
-//!   turn JSON null elements into SQL NULL.)
+//! - MySQL walks both arrays with `JSON_TABLE` and compares elements as JSON
+//!   values. Its `JSON PATH '$'` columns turn JSON null elements into SQL
+//!   NULL, so comparisons are null-safe.
 //! - SQLite calls `oxyde_array_match`, a Rust function the driver registers on
 //!   every pooled connection. A JSONB column value is passed as its JSON text
 //!   (`json_valid(.., 8)` / `json()`, SQLite 3.45+; the bundled SQLite is
@@ -34,7 +34,7 @@ use uuid::Uuid;
 use crate::error::{QueryError, Result};
 use crate::spec_sql::canonical_type;
 use crate::utils::bind::{
-    bind_value, coerce_temporal, element_array_type, parse_decimal_exact, quote_pg_type_path,
+    bind_value, coerce_element, element_array_type, parse_decimal_exact, quote_pg_type_path,
     string_value,
 };
 use crate::utils::value::rmpv_to_json;
@@ -224,13 +224,14 @@ fn typed_element(value: &rmpv::Value, item: &ColumnTypeSpec) -> Result<Value> {
         (S::DateTime | S::DateTimeUtc | S::Date | S::Time, V::String(_)) => {
             temporal_element(bind_value(value, item), item)
         }
-        // Stored strings were parsed as JSON text on insert ('"a"' is stored
-        // as "a"), so operands are too. Text that is not JSON was stored as
-        // NULL (PostgreSQL) and cannot be matched.
-        (S::Json | S::JsonBinary, V::String(_)) => match bind_value(value, item) {
-            json @ Value::Json(Some(_)) => Some(json),
-            _ => None,
-        },
+        // Strings are stored as JSON text when they parse ('"a"' is stored
+        // as "a") and as plain JSON strings otherwise, so operands are too.
+        (S::Json | S::JsonBinary, V::String(_)) => {
+            match coerce_element(bind_value(value, item), item) {
+                json @ Value::Json(Some(_)) => Some(json),
+                _ => None,
+            }
+        }
         (S::Json | S::JsonBinary, _) => rmpv_to_json(value).map(|j| Value::Json(Some(Box::new(j)))),
         _ => None,
     };
@@ -245,10 +246,10 @@ fn typed_element(value: &rmpv::Value, item: &ColumnTypeSpec) -> Result<Value> {
 
 /// Keep only parses that produced the element's own temporal type; aware and
 /// naive datetimes are normalized to the column's flavour exactly as stored
-/// elements are (`coerce_temporal`).
+/// elements are (`coerce_element`).
 fn temporal_element(bound: Value, item: &ColumnTypeSpec) -> Option<Value> {
     use ColumnTypeSpec as S;
-    match (item, coerce_temporal(bound, item)) {
+    match (item, coerce_element(bound, item)) {
         (S::DateTime, v @ Value::ChronoDateTime(Some(_)))
         | (S::DateTimeUtc, v @ Value::ChronoDateTimeUtc(Some(_)))
         | (S::Date, v @ Value::ChronoDate(Some(_)))
@@ -508,15 +509,17 @@ fn mysql(col: &SimpleExpr, op: ArrayOp, operand: &Value, decimal: bool) -> Simpl
     //
     // `{col}` is unqualified outside joins, so read inside these subqueries
     // it could resolve to one of their columns instead (a column named
-    // `oxyde_i`). It is read once, by a holder that is the only FROM item of
+    // `oxyde_v`). It is read once, by a holder that is the only FROM item of
     // a subquery, where nothing but the outer query is in scope; a
     // JSON_TABLE, since derived tables cannot refer to the outer query
     // before MySQL 8.0.14.
-    let left = "JSON_TABLE(oxyde_h.oxyde_c, '$[*]' COLUMNS (oxyde_i FOR ORDINALITY)) AS oxyde_l";
+    let left = "JSON_TABLE(oxyde_h.oxyde_c, '$[*]' COLUMNS (oxyde_v JSON PATH '$')) AS oxyde_l";
     let right = "(SELECT CAST({arg} AS JSON) AS oxyde_j) AS oxyde_a \
-         CROSS JOIN JSON_TABLE(oxyde_a.oxyde_j, '$[*]' COLUMNS (oxyde_i FOR ORDINALITY)) AS oxyde_r";
-    let l = "JSON_EXTRACT(oxyde_h.oxyde_c, CONCAT('$[', oxyde_l.oxyde_i - 1, ']'))";
-    let r = "JSON_EXTRACT(oxyde_a.oxyde_j, CONCAT('$[', oxyde_r.oxyde_i - 1, ']'))";
+         CROSS JOIN JSON_TABLE(oxyde_a.oxyde_j, '$[*]' COLUMNS (oxyde_v JSON PATH '$')) AS oxyde_r";
+    // Elements, extracted once per row of each JSON_TABLE. The path always
+    // exists, so SQL NULL here is a JSON null element.
+    let l = "oxyde_l.oxyde_v";
+    let r = "oxyde_r.oxyde_v";
 
     let eq = if decimal {
         // Typed decimals are stored as JSON strings that keep their scale
@@ -546,8 +549,7 @@ fn mysql(col: &SimpleExpr, op: ArrayOp, operand: &Value, decimal: bool) -> Simpl
              - CAST(REGEXP_SUBSTR({lt}, '[-+]?[0-9]+$') AS SIGNED))"
         );
         format!(
-            "CASE WHEN JSON_TYPE({l}) = 'NULL' OR JSON_TYPE({r}) = 'NULL' \
-             THEN JSON_TYPE({l}) = JSON_TYPE({r}) \
+            "CASE WHEN {l} IS NULL OR {r} IS NULL THEN {l} IS NULL AND {r} IS NULL \
              WHEN JSON_TYPE({l}) NOT IN ('STRING', 'INTEGER', 'UNSIGNED INTEGER', 'DECIMAL', 'DOUBLE') \
              OR {lt} NOT REGEXP '{MYSQL_DECIMAL_LEXEME}' THEN FALSE \
              WHEN {lt} REGEXP '[eE]' \
@@ -556,7 +558,7 @@ fn mysql(col: &SimpleExpr, op: ArrayOp, operand: &Value, decimal: bool) -> Simpl
              ELSE CAST({lt} AS DECIMAL(65,30)) = CAST(JSON_UNQUOTE({r}) AS DECIMAL(65,30)) END"
         )
     } else {
-        format!("{l} = {r}")
+        format!("{l} <=> {r}")
     };
 
     let body = format!(
@@ -886,26 +888,32 @@ mod tests {
     }
 
     #[test]
-    fn json_string_elements_are_parsed_like_inserted_ones() {
+    fn json_string_elements_match_how_they_were_inserted() {
         for item in [ColumnTypeSpec::Json, ColumnTypeSpec::JsonBinary] {
-            let element = |v: rmpv::Value| typed_element(&v, &item);
-            assert_eq!(
-                element(rmpv::Value::String(r#""hello""#.into())).unwrap(),
-                Value::Json(Some(Box::new(serde_json::json!("hello"))))
-            );
-            assert_eq!(
-                element(rmpv::Value::String(r#"{"a": 1}"#.into())).unwrap(),
-                Value::Json(Some(Box::new(serde_json::json!({"a": 1}))))
-            );
-            // Insert cannot store text that is not JSON as a JSON element.
-            let err = element(rmpv::Value::String("hello".into()))
-                .unwrap_err()
-                .to_string();
-            assert!(err.contains("not a valid JSON value"), "{err}");
+            let array = ColumnTypeSpec::Array {
+                item: Box::new(item.clone()),
+            };
+            let cases = [
+                (r#""hello""#, serde_json::json!("hello")),
+                (r#"{"a": 1}"#, serde_json::json!({"a": 1})),
+                // Text that is not JSON is a plain string
+                ("hello", serde_json::json!("hello")),
+                ("{oops", serde_json::json!("{oops")),
+            ];
+            for (text, expected) in cases {
+                let expected = Value::Json(Some(Box::new(expected)));
+                let operand = typed_element(&rmpv::Value::String(text.into()), &item).unwrap();
+                assert_eq!(operand, expected, "{text}");
+                let stored = bind_value(&rmpv::Value::Array(vec![text.into()]), &array);
+                assert_eq!(
+                    stored,
+                    Value::Array(ArrayType::Json, Some(Box::new(vec![expected])))
+                );
+            }
             // Non-string elements convert as before.
             let map = rmpv::Value::Map(vec![("a".into(), 1.into())]);
             assert_eq!(
-                element(map).unwrap(),
+                typed_element(&map, &item).unwrap(),
                 Value::Json(Some(Box::new(serde_json::json!({"a": 1}))))
             );
         }

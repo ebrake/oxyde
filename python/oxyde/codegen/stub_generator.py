@@ -18,10 +18,10 @@ from oxyde.models.base import Model
 from oxyde.models.lookups import (
     ARRAY_LOOKUPS,
     _allowed_lookups_for_meta,
-    _array_lookup_spec,
     _field_spec,
     _lookup_category,
     _resolve_column_meta,
+    _supports_array_lookups,
 )
 from oxyde.models.registry import registered_tables
 from oxyde.models.utils import _unpack_annotated, _unwrap_optional
@@ -147,7 +147,7 @@ def _filter_field_specs(model_class: type[Model]) -> dict[str, _FilterFieldSpec]
             python_type, _ = _unwrap_optional(base_hint)
 
         array_value_type = None
-        if _array_lookup_spec(meta, spec) is not None:
+        if _supports_array_lookups(meta, spec):
             array_value_type = _array_value_type(python_type)
         specs[field_name] = _FilterFieldSpec(
             _get_python_type_name(python_type),

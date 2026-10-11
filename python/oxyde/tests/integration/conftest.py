@@ -256,7 +256,7 @@ class ArrayDoc(Model):
     # Naive TIMESTAMP[]: aware elements are stored (and matched) as UTC
     times: list[datetime] | None = Field(default=None, db_nullable=True)
     # JSONB[] on PostgreSQL, a JSON array elsewhere
-    items: list[dict] | None = Field(default=None, db_nullable=True)
+    items: list[dict | str] | None = Field(default=None, db_nullable=True)
     # JSONB on PostgreSQL
     payload: dict | list | None = Field(default=None, db_nullable=True)
     # Plain json on PostgreSQL (no equality operator without a jsonb cast)
@@ -293,7 +293,7 @@ class ArrayShadow(Model):
         default=None, db_nullable=True, db_column="__oxyde_v"
     )
     i: list[int | None] | None = Field(
-        default=None, db_nullable=True, db_column="oxyde_i"
+        default=None, db_nullable=True, db_column="oxyde_v"
     )
     j: list[str | None] | None = Field(
         default=None, db_nullable=True, db_column="oxyde_j"

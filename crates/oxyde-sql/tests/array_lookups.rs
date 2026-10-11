@@ -238,7 +238,7 @@ fn mysql_walks_both_arrays_with_json_table() {
             "{sql}"
         );
         // The column is read once, by a holder outside the JSON_TABLE
-        // subqueries, so a column named like their columns (`oxyde_i`)
+        // subqueries, so a column named like their columns (`oxyde_v`)
         // cannot be shadowed.
         assert!(
             sql.contains(
@@ -247,17 +247,20 @@ fn mysql_walks_both_arrays_with_json_table() {
             "{sql}"
         );
         assert!(
-            sql.contains("JSON_TABLE(oxyde_h.oxyde_c, '$[*]' COLUMNS (oxyde_i FOR ORDINALITY))"),
+            sql.contains("JSON_TABLE(oxyde_h.oxyde_c, '$[*]' COLUMNS (oxyde_v JSON PATH '$'))"),
             "{sql}"
         );
         assert!(
             sql.contains("(SELECT CAST(? AS JSON) AS oxyde_j) AS oxyde_a CROSS JOIN JSON_TABLE(oxyde_a.oxyde_j, '$[*]'"),
             "{sql}"
         );
+        // Elements are JSON_TABLE columns, never re-extracted per pair, and
+        // compare null-safe: JSON null elements read as SQL NULL.
         assert!(
-            sql.contains("JSON_EXTRACT(oxyde_h.oxyde_c, CONCAT('$[', oxyde_l.oxyde_i - 1, ']'))"),
+            sql.contains("WHERE oxyde_l.oxyde_v <=> oxyde_r.oxyde_v"),
             "{sql}"
         );
+        assert!(!sql.contains("JSON_EXTRACT"), "{sql}");
         assert!(!sql.contains("CAST(JSON_UNQUOTE"), "{sql}");
         // Containment leads with a JSON_CONTAINS prefilter, which binds the
         // operand a second time; overlap binds it once.
@@ -311,9 +314,13 @@ fn mysql_decimal_cast_is_guarded_against_values_it_cannot_take() {
         }),
     )
     .build(Dialect::Mysql);
-    let l = "JSON_UNQUOTE(JSON_EXTRACT(oxyde_h.oxyde_c, CONCAT('$[', oxyde_l.oxyde_i - 1, ']')))";
+    let l = "JSON_UNQUOTE(oxyde_l.oxyde_v)";
     // Each guard is a CASE branch before the cast, in this order.
     let guards = [
+        // JSON null elements read as SQL NULL and match only each other.
+        "CASE WHEN oxyde_l.oxyde_v IS NULL OR oxyde_r.oxyde_v IS NULL \
+         THEN oxyde_l.oxyde_v IS NULL AND oxyde_r.oxyde_v IS NULL"
+            .to_string(),
         "NOT IN ('STRING', 'INTEGER', 'UNSIGNED INTEGER', 'DECIMAL', 'DOUBLE')".to_string(),
         format!("{l} NOT REGEXP '^[-+]?([0-9]{{1,35}}([.][0-9]{{0,30}})?|[.][0-9]{{1,30}})([eE][-+]?[0-9]{{1,2}})?$' THEN FALSE"),
         format!("ABS({l} + 0e0) BETWEEN 1e-28 AND 1e29 AND "),

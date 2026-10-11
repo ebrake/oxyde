@@ -147,6 +147,26 @@ class TestArrayLookups:
         assert await _names(db, amounts__contains=[exact]) == {"full"}
 
     @pytest.mark.asyncio
+    async def test_json_elements_from_strings(self, db):
+        # JSON text is parsed and any other text is a plain JSON string, for
+        # operands as on insert: '"hello"' and "hello" are the same element.
+        await ArrayDoc.objects.create(
+            name="strings", items=['"hello"', "world", '{"a": 1}'], using=db.name
+        )
+        await ArrayDoc.objects.create(name="other", items=["x"], using=db.name)
+        rows = await ArrayDoc.objects.filter(name="strings").all(using=db.name)
+        assert rows[0].items == ["hello", "world", {"a": 1}]
+        assert await _names(db, items__contains=["hello"]) == {"strings"}
+        assert await _names(db, items__contains=['"world"', {"a": 1}]) == {"strings"}
+        assert await _names(db, items__contains=['{"a": 1}']) == {"strings"}
+        assert await _names(db, items__overlap=["x", '"hello"']) == {"strings", "other"}
+        assert await _names(
+            db, items__contained_by=["hello", "world", {"a": 1}]
+        ) == {"strings"}
+        assert await _names(db, items__contains=['"x"']) == {"other"}
+        assert await _names(db, items__contains=["{oops"]) == set()
+
+    @pytest.mark.asyncio
     async def test_q_combinations_and_negation(self, db):
         await _seed(db)
 
@@ -221,7 +241,7 @@ class TestArrayLookups:
 
 class TestColumnsNamedLikeInternalAliases:
     """A stored column named like an alias inside the lookup's subqueries
-    (`__oxyde_v` on PostgreSQL, `oxyde_i` / `oxyde_j` on MySQL) is still the
+    (`__oxyde_v` on PostgreSQL, `oxyde_v` / `oxyde_j` on MySQL) is still the
     column being filtered."""
 
     @pytest.mark.asyncio
@@ -406,7 +426,8 @@ class TestPostgresArrayCasts:
             stamps=[datetime(2024, 1, 1, 8, 0)],
             ratios=[1.5, 0.25],
             blobs=[b"\x00ab", b"cd"],
-            docs=['"hello"', '"world"'],
+            # JSON text and a plain string
+            docs=['"hello"', "world"],
             using=db.name,
         )
 
@@ -449,15 +470,17 @@ class TestPostgresArrayCasts:
         assert await count(blobs__contains=[b"\x00ab"]) == 1
         assert await count(blobs__contained_by=[b"\x00ab", b"cd", b"ef"]) == 1
         assert await count(blobs__overlap=[b"ef"]) == 0
-        # jsonb[] operand elements are parsed as JSON text, as on insert.
+        # jsonb[] elements: JSON text is parsed and any other text is a plain
+        # string, for operands as on insert ('"hello"' and "hello" are equal).
         assert await count(docs=['"hello"', '"world"']) == 1
+        assert await count(docs=["hello", "world"]) == 1
         assert await count(docs__contains=['"hello"']) == 1
-        assert await count(docs__overlap=['"hello"', '"x"']) == 1
-        assert await count(docs__contained_by=['"hello"', '"world"', '"z"']) == 1
-        assert await count(docs__contains=['"x"']) == 0
-        with pytest.raises(RuntimeError, match="not a valid JSON value"):
-            await count(docs__contains=["hello"])
+        assert await count(docs__contains=["hello", "world"]) == 1
+        assert await count(docs__overlap=['"world"', '"x"']) == 1
+        assert await count(docs__contained_by=["hello", '"world"', "z"]) == 1
+        assert await count(docs__contains=["x"]) == 0
         rows = await PgArrayOverrides.objects.all(using=db.name)
+        assert rows[0].docs == ["hello", "world"]
         assert rows[0].blobs == [b"\x00ab", b"cd"]
         assert rows[0].stamps == [datetime(2024, 1, 1, 8, 0, tzinfo=timezone.utc)]
 

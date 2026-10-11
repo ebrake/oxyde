@@ -63,7 +63,7 @@ pub fn bind_value(value: &rmpv::Value, spec: &ColumnTypeSpec) -> Value {
                 Some(arr_type) => {
                     let values: Vec<Value> = arr
                         .iter()
-                        .map(|v| coerce_temporal(bind_value(v, item), item))
+                        .map(|v| coerce_element(bind_value(v, item), item))
                         .collect();
                     Value::Array(arr_type, Some(Box::new(values)))
                 }
@@ -77,19 +77,27 @@ pub fn bind_value(value: &rmpv::Value, spec: &ColumnTypeSpec) -> Value {
     }
 }
 
-/// Convert an aware/naive datetime to the flavour of a `DateTime` /
-/// `DateTimeUtc` spec (via UTC); other values pass through unchanged.
+/// Give an array element the one value kind its item spec stores; other
+/// values pass through unchanged.
 ///
-/// Array elements need one flavour: PostgreSQL array binding drops elements
-/// of the other one as NULL, and the JSON encoder (MySQL/SQLite) writes them
-/// in a format that array lookups would never match.
-pub(crate) fn coerce_temporal(value: Value, spec: &ColumnTypeSpec) -> Value {
+/// - An aware/naive datetime takes the flavour of a `DateTime` /
+///   `DateTimeUtc` spec (via UTC).
+/// - Text that is not JSON becomes a plain JSON string in a `Json` /
+///   `JsonBinary` spec (JSON text was already parsed by `bind_value`).
+///
+/// PostgreSQL array binding drops elements of any other kind as NULL, and
+/// the JSON encoder (MySQL/SQLite) writes them in a format that array
+/// lookups would never match.
+pub(crate) fn coerce_element(value: Value, spec: &ColumnTypeSpec) -> Value {
     match (spec, value) {
         (ColumnTypeSpec::DateTime, Value::ChronoDateTimeUtc(Some(dt))) => {
             Value::ChronoDateTime(Some(Box::new(dt.naive_utc())))
         }
         (ColumnTypeSpec::DateTimeUtc, Value::ChronoDateTime(Some(dt))) => {
             Value::ChronoDateTimeUtc(Some(Box::new(dt.and_utc())))
+        }
+        (ColumnTypeSpec::Json | ColumnTypeSpec::JsonBinary, Value::String(Some(s))) => {
+            Value::Json(Some(Box::new(serde_json::Value::String(*s))))
         }
         (_, value) => value,
     }

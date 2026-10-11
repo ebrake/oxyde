@@ -135,7 +135,9 @@ def is_column_field(meta: ColumnMeta) -> bool:
     (author: Author) are not columns; the synthetic FK field (author_id) is.
     """
     return not (
-        meta.extra.get("reverse_fk") or meta.extra.get("m2m") or meta.foreign_key
+        meta.extra.get("reverse_fk")
+        or meta.extra.get("m2m")
+        or meta.foreign_key is not None
     )
 
 
