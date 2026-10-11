@@ -9,10 +9,15 @@ All notable changes to Oxyde are documented here.
 ### Queries
 
 - UUID fields now support `gt`, `gte`, `lt`, `lte`, `between`, and `range` filters on PostgreSQL, SQLite, and MySQL. These use each database's UUID ordering and typed UUID parameters.
+- Array (`list[T]`) and JSON fields support `contains`, `contained_by`, and `overlap` lookups with a list or tuple on PostgreSQL, SQLite, and MySQL, including arrays of objects. Elements compare as complete values; order and duplicates are ignored. Operands are validated against the element type. On SQLite these lookups also read JSONB values, and call `oxyde_array_match()`, which Oxyde registers on every pooled connection, so the generated SQL needs an Oxyde connection to run. See [Array Lookups](guide/filtering.md#array-lookups).
 
 ### Fixes
 
 - **Joins to a model with renamed columns** — `join()` and FK-traversal filters (`filter(author__name=...)`) failed with `no column found for name` when the related model's primary key set `db_column`, and on SQLite returned undecoded JSON for a related list/JSON field with `db_column`. Joined result columns are named by field, but the primary-key lookup and the column types used for decoding were keyed by column name.
+- **Mixed timezone elements in `list[datetime]`** — an aware element of a naive `list[datetime]` field (or a naive element of a `TIMESTAMPTZ[]` one) was stored as NULL on PostgreSQL and in the other flavour's format on SQLite and MySQL. Elements are now converted to the field's flavour via UTC, as lookup operands are. Rows written before this fix keep the old values until they are saved again.
+- **Array fields with a `db_type` override on PostgreSQL** — `filter(small=[1, 2])` and `small__in=[...]` on a field declared with `db_type="INTEGER[]"` (or another array type narrower than the default) failed with `operator does not exist: integer[] = bigint[]`. Values are now cast to the column's type.
+- `Decimal` values written with an exponent (`Decimal("1E+2")`) are now bound as decimals, not strings; in a `list[Decimal]` on PostgreSQL they were stored as NULL.
+- **String lookups on a `str` field stored as JSON** — `startswith`, `endswith`, `iexact`, `contains` and their case-insensitive forms compared against the quoted JSON text (`"hello"`) on MySQL and SQLite, so anchored lookups never matched a JSON string, and raised an error on PostgreSQL. They now match the string the field reads back as on all three backends; other JSON values still match their JSON text.
 
 ### Migrations
 

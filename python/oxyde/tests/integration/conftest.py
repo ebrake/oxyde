@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 import pytest
@@ -242,10 +242,88 @@ class RenamedChild(Model):
         table_name = "renamed_children"
 
 
+class ArrayDoc(Model):
+    """Array lookup targets: typed arrays plus JSON columns holding arrays."""
+
+    id: int | None = Field(default=None, db_pk=True)
+    name: str = Field(default="", max_length=50)
+    tags: list[str | None] | None = Field(default=None, db_nullable=True)
+    scores: list[int] | None = Field(default=None, db_nullable=True)
+    amounts: list[Annotated[Decimal, Field(max_digits=10, decimal_places=2)]] | None = Field(
+        default=None, db_nullable=True
+    )
+    ids: list[UUID] | None = Field(default=None, db_nullable=True)
+    # Naive TIMESTAMP[]: aware elements are stored (and matched) as UTC
+    times: list[datetime] | None = Field(default=None, db_nullable=True)
+    # JSONB[] on PostgreSQL, a JSON array elsewhere
+    items: list[dict] | None = Field(default=None, db_nullable=True)
+    # JSONB on PostgreSQL
+    payload: dict | list | None = Field(default=None, db_nullable=True)
+    # Plain json on PostgreSQL (no equality operator without a jsonb cast)
+    raw: list[Any] | dict | None = Field(default=None, db_nullable=True, db_type="JSON")
+
+    class Meta:
+        is_table = True
+        table_name = "array_docs"
+
+
+class ArrayNote(Model):
+    """Joins to ArrayDoc; its own `tags` column is text, not an array."""
+
+    id: int | None = Field(default=None, db_pk=True)
+    doc: ArrayDoc | None = Field(default=None, db_nullable=True)
+    tags: str = Field(default="", max_length=50)
+    labels: list[str] | None = Field(
+        default=None, db_nullable=True, db_column="label_list"
+    )
+    # A str field stored as JSON: `contains` with a string is LIKE
+    body: str | None = Field(default=None, db_nullable=True, db_type="JSON")
+
+    class Meta:
+        is_table = True
+        table_name = "array_notes"
+
+
+class ArrayShadow(Model):
+    """Array columns named like the aliases array lookups use internally."""
+
+    id: int | None = Field(default=None, db_pk=True)
+    name: str = Field(default="", max_length=50)
+    v: list[int | None] | None = Field(
+        default=None, db_nullable=True, db_column="__oxyde_v"
+    )
+    i: list[int | None] | None = Field(
+        default=None, db_nullable=True, db_column="oxyde_i"
+    )
+    j: list[str | None] | None = Field(
+        default=None, db_nullable=True, db_column="oxyde_j"
+    )
+    # JSONB on PostgreSQL, whose lookups walk elements under their own alias
+    c: dict | list | None = Field(default=None, db_nullable=True, db_column="oxyde_c")
+
+    class Meta:
+        is_table = True
+        table_name = "array_shadows"
+
+
+class ArrayShadowJson(Model):
+    """A JSON column named like the PostgreSQL element alias."""
+
+    id: int | None = Field(default=None, db_pk=True)
+    name: str = Field(default="", max_length=50)
+    v: dict | list | None = Field(
+        default=None, db_nullable=True, db_column="__oxyde_v"
+    )
+
+    class Meta:
+        is_table = True
+        table_name = "array_shadow_jsons"
+
+
 ALL_MODELS = [
     Event, AliasedEvent, Author, Category, Post, Comment, Tag, PostTag,
     AllTypes, NullableTypes, BytesModel, TdModel, Product, FactoryKeyed,
-    RenamedParent, RenamedChild,
+    RenamedParent, RenamedChild, ArrayDoc, ArrayNote, ArrayShadow, ArrayShadowJson,
 ]
 
 

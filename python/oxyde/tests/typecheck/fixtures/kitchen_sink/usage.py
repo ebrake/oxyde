@@ -269,12 +269,29 @@ async def field_types_filters() -> list[Post]:
             ),
             title__startswith="Hi",
             title__exact="Hi",
+            labels__contains=["python"],
+            labels__contained_by=("python", "rust"),
+            labels__overlap=[],
+            metadata__contains=[{"key": "value"}],
             published_on__year=2026,
             publish_time__gt=time(9, 0),
             author=1,
             author__gte=1,
             author_id__in=[1, 2],
         )
+        .all()
+    )
+
+
+async def array_lookup_null_elements(names: list[str]) -> list[Post]:
+    # None matches a null element; a list[str] variable must still be accepted.
+    return await (
+        Post.objects.filter(
+            labels__contains=[None],
+            labels__contained_by=names,
+            labels__overlap=(None, "python"),
+        )
+        .exclude(labels__overlap=["rust", None])
         .all()
     )
 

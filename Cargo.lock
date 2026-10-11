@@ -1102,6 +1102,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures",
+ "libsqlite3-sys",
  "once_cell",
  "oxyde-codec",
  "oxyde-sql",

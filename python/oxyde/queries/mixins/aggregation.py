@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Container
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
@@ -116,14 +117,14 @@ class AggregationMixin(Generic[TModel]):
             annotation_kwargs = {}
             model_kwargs = {}
             for key, value in kwargs.items():
-                field_name, _ = _split_having_key(key)
+                field_name, _ = _split_having_key(key, self._annotations)
                 if field_name in self._annotations:
                     annotation_kwargs[key] = value
                 else:
                     model_kwargs[key] = value
 
             for key, value in annotation_kwargs.items():
-                field_name, lookup = _split_having_key(key)
+                field_name, lookup = _split_having_key(key, self._annotations)
                 operator = _HAVING_LOOKUP_OPS.get(lookup)
                 if operator is None:
                     raise ValueError(
@@ -315,14 +316,17 @@ class AggregationMixin(Generic[TModel]):
         return await self._aggregate(Min, field, "_min", using=using, client=client)
 
 
-def _split_having_key(key: str) -> tuple[str, str]:
+def _split_having_key(key: str, annotations: Container[str] = ()) -> tuple[str, str]:
     """Split a having kwarg key into (field_name, lookup).
+
+    A key that is itself an annotation alias is that alias with "exact",
+    even when it ends in a lookup name ("tags__overlap").
 
     Examples:
         "total__gt" -> ("total", "gt")
         "total"     -> ("total", "exact")
     """
-    if "__" not in key:
+    if "__" not in key or key in annotations:
         return key, "exact"
     parts = key.rsplit("__", 1)
     if parts[1] in ALL_LOOKUPS:

@@ -263,6 +263,22 @@ class TestHavingMethod:
 
         assert ir["having"] is not None
 
+    def test_having_alias_ending_in_a_lookup_name(self):
+        """An alias like "tags__overlap" is the alias, not alias + lookup."""
+        query = (
+            Product.objects.filter()
+            .annotate(tags__overlap=Count("*"), total=Count("*"))
+            .group_by("category")
+            .having(tags__overlap=3, total__gt=1)
+        )
+        having = query.to_ir()["having"]
+        conditions = having["conditions"]
+
+        assert {c["field"]: c["operator"] for c in conditions} == {
+            "tags__overlap": "=",
+            "total": ">",
+        }
+
 
 class TestManagerAggregates:
     """Test manager aggregate methods."""

@@ -3,8 +3,11 @@
 use std::collections::HashMap;
 
 use oxyde_codec::{Aggregate, ColumnTypeSpec, Filter, FilterNode};
-use sea_query::{Expr, Func, LikeExpr, SimpleExpr};
+use sea_query::{Expr, Func, LikeExpr, SimpleExpr, Value};
 
+use super::array::{
+    build_array_filter, check_pg_operand_range, pg_array_type, render_col, ArrayOp,
+};
 use crate::aggregate::build_aggregate;
 use crate::error::{QueryError, Result};
 use crate::utils::{bind_value, typed_value_expr, ColumnIdent, TableIdent};
@@ -32,18 +35,63 @@ fn make_col_expr(col_name: &str, default_table: Option<&str>) -> Expr {
 }
 
 /// Resolve column type hint from col_types map.
-/// Handles qualified names like "user.age" by extracting the column part.
+///
+/// A qualified name ("user.age") has its own entry when the joined column
+/// has a spec. It never falls back to the bare column name, which is the
+/// base table's column of that name and may have a different type.
 fn resolve_col_spec<'a>(
     col_name: &str,
     col_types: Option<&'a HashMap<String, ColumnTypeSpec>>,
 ) -> &'a ColumnTypeSpec {
-    if let Some(spec) = col_types.and_then(|ct| ct.get(col_name)) {
-        return spec;
-    }
-    let col_key = col_name.rsplit('.').next().unwrap_or(col_name);
     col_types
-        .and_then(|ct| ct.get(col_key))
+        .and_then(|ct| ct.get(col_name))
         .unwrap_or(&ColumnTypeSpec::Unknown)
+}
+
+/// `typed_value_expr`, plus the PostgreSQL cast of an array value to the
+/// column's `db_type` override: an `INTEGER[]` column has no `=` with the
+/// `bigint[]` the value binds as. Overrides that array lookups cannot read
+/// either (`INT[][]`) keep the plain value, as before.
+fn filter_value_expr(
+    value: Value,
+    spec: &ColumnTypeSpec,
+    db_type: Option<&str>,
+    dialect: Dialect,
+) -> Result<SimpleExpr> {
+    if let (Dialect::Postgres, ColumnTypeSpec::Array { item }, Some(db_type), Value::Array(..)) =
+        (dialect, spec, db_type, &value)
+    {
+        if db_type.trim().ends_with("[]") {
+            if let Ok(array_type) = pg_array_type(item, Some(db_type)) {
+                check_pg_operand_range(&value, &array_type)?;
+                return Ok(Expr::cust_with_values(
+                    format!("$1::{array_type}"),
+                    vec![value],
+                ));
+            }
+        }
+    }
+    Ok(typed_value_expr(value, spec, dialect))
+}
+
+/// Left side of LIKE / ILIKE. A `str` field stored as JSON matches the
+/// string it reads back as, not its quoted JSON text; other JSON values
+/// match their JSON text.
+fn like_target(col: Expr, spec: &ColumnTypeSpec, dialect: Dialect) -> Expr {
+    if !matches!(spec, ColumnTypeSpec::Json | ColumnTypeSpec::JsonBinary) {
+        return col;
+    }
+    let template = match dialect {
+        Dialect::Postgres => "{col} #>> '{}'",
+        Dialect::Mysql => "JSON_UNQUOTE({col})",
+        // SQLite does not validate JSON columns, and json_type() raises on
+        // text that is not JSON, so it is checked first.
+        Dialect::Sqlite => {
+            "CASE WHEN json_valid({col}) THEN CASE json_type({col}) \
+             WHEN 'text' THEN json_extract({col}, '$') ELSE {col} END ELSE {col} END"
+        }
+    };
+    Expr::expr(render_col(template, &col.into(), dialect))
 }
 
 fn like_expr(filter: &Filter, pattern: String) -> Result<LikeExpr> {
@@ -141,26 +189,55 @@ fn apply_filter(
     let agg_match =
         aggregates.and_then(|aggs| aggs.iter().find(|a| a.alias.as_deref() == Some(col_name)));
 
+    let spec = resolve_col_spec(col_name, col_types);
+
+    if let Some(op) = ArrayOp::from_operator(&filter.operator) {
+        if agg_match.is_some() {
+            return Err(QueryError::InvalidQuery(
+                "Array lookups cannot filter on aggregate aliases".into(),
+            ));
+        }
+        if matches!(spec, ColumnTypeSpec::Unknown) {
+            return Err(QueryError::InvalidQuery(format!(
+                "Array lookup on '{col_name}' needs its column type, which this query does not provide"
+            )));
+        }
+        return build_array_filter(
+            &make_col_expr(col_name, default_table).into(),
+            op,
+            &filter.value,
+            spec,
+            filter.db_type.as_deref(),
+            dialect,
+        );
+    }
+
     let col = if let Some(agg) = agg_match {
         Expr::expr(build_aggregate(agg)?)
     } else {
         make_col_expr(col_name, default_table)
     };
 
-    let spec = resolve_col_spec(col_name, col_types);
+    let db_type = filter.db_type.as_deref();
+    let typed = |value: Value| filter_value_expr(value, spec, db_type, dialect);
     let val = bind_value(&filter.value, spec);
 
     let expr = match filter.operator.as_str() {
-        "=" => col.eq(typed_value_expr(val, spec, dialect)),
-        "!=" => col.ne(typed_value_expr(val, spec, dialect)),
-        ">" => col.gt(typed_value_expr(val, spec, dialect)),
-        ">=" => col.gte(typed_value_expr(val, spec, dialect)),
-        "<" => col.lt(typed_value_expr(val, spec, dialect)),
-        "<=" => col.lte(typed_value_expr(val, spec, dialect)),
+        "=" => col.eq(typed(val)?),
+        "!=" => col.ne(typed(val)?),
+        ">" => col.gt(typed(val)?),
+        ">=" => col.gte(typed(val)?),
+        "<" => col.lt(typed(val)?),
+        "<=" => col.lte(typed(val)?),
         "LIKE" => {
             let text = filter.value.as_str().ok_or_else(|| {
                 QueryError::InvalidQuery("LIKE operator requires string value".into())
             })?;
+            let col = if agg_match.is_some() {
+                col
+            } else {
+                like_target(col, spec, dialect)
+            };
             col.like(like_expr(filter, text.to_string())?)
         }
         "ILIKE" => {
@@ -168,15 +245,19 @@ fn apply_filter(
                 QueryError::InvalidQuery("ILIKE operator requires string value".into())
             })?;
             let lowered = text.to_lowercase();
-            let lower_col = Func::lower(make_col_expr(col_name, default_table));
+            let lower_col = Func::lower(like_target(
+                make_col_expr(col_name, default_table),
+                spec,
+                dialect,
+            ));
             Expr::expr(lower_col).like(like_expr(filter, lowered)?)
         }
         "IN" => {
             if let rmpv::Value::Array(arr) = &filter.value {
-                let values: Vec<SimpleExpr> = arr
+                let values = arr
                     .iter()
-                    .map(|v| typed_value_expr(bind_value(v, spec), spec, dialect))
-                    .collect();
+                    .map(|v| typed(bind_value(v, spec)))
+                    .collect::<Result<Vec<_>>>()?;
                 col.is_in(values)
             } else {
                 return Err(QueryError::InvalidQuery(
@@ -191,8 +272,8 @@ fn apply_filter(
                         "BETWEEN operator requires exactly two values".to_string(),
                     ));
                 }
-                let start = typed_value_expr(bind_value(&arr[0], spec), spec, dialect);
-                let end = typed_value_expr(bind_value(&arr[1], spec), spec, dialect);
+                let start = typed(bind_value(&arr[0], spec))?;
+                let end = typed(bind_value(&arr[1], spec))?;
                 col.between(start, end)
             } else {
                 return Err(QueryError::InvalidQuery(

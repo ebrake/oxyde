@@ -59,7 +59,7 @@ fn translate_user_db_type(db_type: &str, dialect: Dialect) -> String {
 }
 
 /// Canonical per-dialect SQL type for a spec (no user override).
-fn canonical_type(spec: &ColumnTypeSpec, dialect: Dialect, is_pk: bool) -> String {
+pub(crate) fn canonical_type(spec: &ColumnTypeSpec, dialect: Dialect, is_pk: bool) -> String {
     use ColumnTypeSpec as S;
     use Dialect as D;
 

@@ -61,7 +61,10 @@ pub fn bind_value(value: &rmpv::Value, spec: &ColumnTypeSpec) -> Value {
             }
             ColumnTypeSpec::Array { item } => match element_array_type(item) {
                 Some(arr_type) => {
-                    let values: Vec<Value> = arr.iter().map(|v| bind_value(v, item)).collect();
+                    let values: Vec<Value> = arr
+                        .iter()
+                        .map(|v| coerce_temporal(bind_value(v, item), item))
+                        .collect();
                     Value::Array(arr_type, Some(Box::new(values)))
                 }
                 // Unknown / nested-array element types have no sea_query
@@ -71,6 +74,68 @@ pub fn bind_value(value: &rmpv::Value, spec: &ColumnTypeSpec) -> Value {
             _ => Value::String(Some(Box::new(format!("{value}")))),
         },
         rmpv::Value::Ext(_, _) => Value::String(Some(Box::new(format!("{value}")))),
+    }
+}
+
+/// Convert an aware/naive datetime to the flavour of a `DateTime` /
+/// `DateTimeUtc` spec (via UTC); other values pass through unchanged.
+///
+/// Array elements need one flavour: PostgreSQL array binding drops elements
+/// of the other one as NULL, and the JSON encoder (MySQL/SQLite) writes them
+/// in a format that array lookups would never match.
+pub(crate) fn coerce_temporal(value: Value, spec: &ColumnTypeSpec) -> Value {
+    match (spec, value) {
+        (ColumnTypeSpec::DateTime, Value::ChronoDateTimeUtc(Some(dt))) => {
+            Value::ChronoDateTime(Some(Box::new(dt.naive_utc())))
+        }
+        (ColumnTypeSpec::DateTimeUtc, Value::ChronoDateTime(Some(dt))) => {
+            Value::ChronoDateTimeUtc(Some(Box::new(dt.and_utc())))
+        }
+        (_, value) => value,
+    }
+}
+
+/// Parse a decimal string; Python's `str(Decimal)` may use an exponent.
+pub(crate) fn parse_decimal(s: &str) -> Option<Decimal> {
+    s.parse::<Decimal>()
+        .or_else(|_| Decimal::from_scientific(s))
+        .ok()
+        // Exact values the two parsers miss: zeros with a large exponent
+        // ("0E-30") and mantissas with long runs of trailing zeros.
+        .or_else(|| parse_decimal_exact(s))
+}
+
+/// `parse_decimal` without rounding: `None` for a value a `Decimal` cannot
+/// hold exactly (more than 28 fractional digits once trailing zeros go).
+pub(crate) fn parse_decimal_exact(s: &str) -> Option<Decimal> {
+    let (mantissa, exponent) = match s.split_once(['e', 'E']) {
+        Some((mantissa, exponent)) => (mantissa, Some(exponent)),
+        None => (s, None),
+    };
+    let exact = Decimal::from_str_exact(mantissa).or_else(|_| {
+        // Trailing fractional zeros do not change the value.
+        let trimmed = match mantissa.split_once('.') {
+            Some((int, frac)) => match frac.trim_end_matches('0') {
+                "" => int.to_string(),
+                frac => format!("{int}.{frac}"),
+            },
+            None => mantissa.to_string(),
+        };
+        Decimal::from_str_exact(&trimmed)
+    });
+    let mantissa = exact.ok()?;
+    match exponent {
+        // Zero is exact whatever its exponent ("0E-30" is Python's
+        // `str(Decimal)` of a zero with 30 places), but `from_scientific`
+        // rejects any exponent beyond ±28.
+        Some(exponent) if mantissa.is_zero() => exponent.parse::<i64>().ok().map(|_| Decimal::ZERO),
+        // The mantissa now parses exactly, and without trailing zeros it
+        // leaves the exponent the most room ("1.500E-27"); an exponent that
+        // still does not fit is an error there, not a rounding.
+        Some(exponent) => {
+            Decimal::from_scientific(&format!("{}e{exponent}", mantissa.normalize())).ok()
+        }
+        None => Some(mantissa),
     }
 }
 
@@ -124,9 +189,9 @@ fn bind_string(s: &str, spec: &ColumnTypeSpec) -> Value {
             Ok(u) => Value::Uuid(Some(Box::new(u))),
             Err(_) => string_value(s),
         },
-        ColumnTypeSpec::Decimal { .. } => match s.parse::<Decimal>() {
-            Ok(d) => Value::Decimal(Some(Box::new(d))),
-            Err(_) => string_value(s),
+        ColumnTypeSpec::Decimal { .. } => match parse_decimal(s) {
+            Some(d) => Value::Decimal(Some(Box::new(d))),
+            None => string_value(s),
         },
         ColumnTypeSpec::Json | ColumnTypeSpec::JsonBinary => {
             match serde_json::from_str::<serde_json::Value>(s) {
@@ -175,7 +240,7 @@ fn typed_null(spec: &ColumnTypeSpec) -> Value {
 
 /// sea_query element type for an array item spec.
 /// `None` for items that sea_query arrays cannot carry (Unknown, nested arrays).
-fn element_array_type(item: &ColumnTypeSpec) -> Option<ArrayType> {
+pub(crate) fn element_array_type(item: &ColumnTypeSpec) -> Option<ArrayType> {
     match item {
         ColumnTypeSpec::BigInteger | ColumnTypeSpec::Timedelta => Some(ArrayType::BigInt),
         ColumnTypeSpec::Double => Some(ArrayType::Double),
@@ -214,7 +279,7 @@ pub(crate) fn quote_pg_type_path(name: &str) -> String {
         .join(".")
 }
 
-fn string_value(s: &str) -> Value {
+pub(crate) fn string_value(s: &str) -> Value {
     Value::String(Some(Box::new(s.to_string())))
 }
 
@@ -558,6 +623,56 @@ mod tests {
             }
             other => panic!("expected Array(BigInt), got {other:?}"),
         }
+    }
+
+    #[test]
+    fn datetime_array_elements_take_the_spec_flavour() {
+        let val = rmpv::Value::Array(vec![
+            s("2024-01-01T10:00:00+02:00"),
+            s("2024-01-01T10:00:00"),
+        ]);
+
+        match bind_value(&val, &array_of(ColumnTypeSpec::DateTime)) {
+            Value::Array(ArrayType::ChronoDateTime, Some(vals)) => {
+                let expected = NaiveDateTime::from_str("2024-01-01T08:00:00").unwrap();
+                assert_eq!(vals[0], Value::ChronoDateTime(Some(Box::new(expected))));
+                assert!(matches!(vals[1], Value::ChronoDateTime(Some(_))));
+            }
+            other => panic!("expected Array(ChronoDateTime), got {other:?}"),
+        }
+
+        match bind_value(&val, &array_of(ColumnTypeSpec::DateTimeUtc)) {
+            Value::Array(ArrayType::ChronoDateTimeUtc, Some(vals)) => {
+                let expected = NaiveDateTime::from_str("2024-01-01T10:00:00")
+                    .unwrap()
+                    .and_utc();
+                assert!(matches!(vals[0], Value::ChronoDateTimeUtc(Some(_))));
+                assert_eq!(vals[1], Value::ChronoDateTimeUtc(Some(Box::new(expected))));
+            }
+            other => panic!("expected Array(ChronoDateTimeUtc), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decimal_exponent_string() {
+        assert_eq!(
+            bind_value(&s("1E+2"), &decimal_spec()),
+            Value::Decimal(Some(Box::new(Decimal::from(100))))
+        );
+    }
+
+    #[test]
+    fn zero_decimals_with_any_exponent() {
+        for zero in ["0E-30", "0E+40", "-0E-50", "0.000E-99"] {
+            assert_eq!(parse_decimal_exact(zero), Some(Decimal::ZERO), "{zero}");
+            assert_eq!(parse_decimal(zero), Some(Decimal::ZERO), "{zero}");
+        }
+        assert_eq!(parse_decimal_exact("0Eabc"), None);
+        assert_eq!(parse_decimal("0Eabc"), None);
+        assert_eq!(
+            bind_value(&s("0E-30"), &decimal_spec()),
+            Value::Decimal(Some(Box::new(Decimal::ZERO)))
+        );
     }
 
     #[test]

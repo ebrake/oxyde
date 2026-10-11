@@ -132,6 +132,81 @@ posts = await Post.objects.filter(created_at__month=(2024, 12)).all()
 posts = await Post.objects.filter(created_at__day=(2024, 12, 25)).all()
 ```
 
+## Array Lookups
+
+Array fields (`list[T]`) and JSON fields holding arrays support three
+lookups. Each takes a list or tuple:
+
+| Lookup | Matches rows whose array... |
+|---|---|
+| `contains` | holds every given element |
+| `contained_by` | has only elements from the given ones |
+| `overlap` | shares at least one element with the given ones |
+
+```python
+class Article(Model):
+    id: int | None = Field(default=None, db_pk=True)
+    tags: list[str] = Field(default_factory=list)
+    blocks: list[dict] = Field(default_factory=list)
+    extra: dict | list | None = None  # JSON column
+
+    class Meta:
+        is_table = True
+
+await Article.objects.filter(tags__contains=["rust"]).all()
+await Article.objects.filter(tags__contained_by=("rust", "python", "go")).all()
+await Article.objects.filter(tags__overlap=["rust", "python"]).all()
+
+# Objects are compared as whole values
+await Article.objects.filter(blocks__contains=[{"type": "code", "lang": "rust"}]).all()
+```
+
+How elements are compared:
+
+- The array is treated as a set: order and duplicates do not matter.
+- Objects match only as complete values (key order is ignored). `{"a": 1}`
+  does not match an element `{"a": 1, "b": 2}`. Arrays nested inside
+  elements keep their order.
+- Strings are case-sensitive, booleans never equal numbers, and equal numbers
+  match (`1` and `1.0`; a `Decimal` array stored as `1.50` matches `1.5`).
+  MySQL compares non-integer JSON numbers as floating point, so values beyond
+  double precision may compare equal there. In a `Decimal` array, an element
+  that is not a number (written by another tool) never matches.
+- `None` in the list matches a null element.
+- An empty list: `contains=[]` matches every array, `overlap=[]` matches
+  none, and `contained_by=[]` matches only empty arrays.
+- A NULL column never matches, nor does its negation (SQL NULL semantics).
+  A JSON value that is not an array (an object, a string, JSON `null`) does not
+  match, so `exclude(...)` includes it. On SQLite, which does not validate JSON
+  columns, neither does stored text that is not valid JSON, nor a BLOB;
+  SQLite's binary JSONB is read as the JSON it holds.
+
+Elements must fit the field's element type: `tags__contains=[1]` on a
+`list[str]` field raises an error rather than silently matching nothing.
+Values in a JSON operand are serialized the same way as when they are saved
+(for example `UUID` and `Decimal` become strings).
+
+`contains` with a string on a `str` field keeps its `LIKE` meaning, even when
+the field is stored as JSON. Nested typed arrays (`list[list[int]]`) do not
+support array lookups; store such data in a JSON field.
+
+Backend notes:
+
+- **PostgreSQL** uses the native `@>`, `<@` and `&&` operators for typed
+  arrays, so GIN indexes on those columns apply. A list containing `None` is
+  compared element by element instead, which scans rows. JSON(B) columns
+  compare elements individually; `contains` checks `@>` first, which a GIN
+  index on the column can serve, while `contained_by` and `overlap` scan rows.
+- **MySQL** evaluates the lookups row by row with `JSON_TABLE` (MySQL 8.0.4+);
+  multi-valued indexes are not used.
+- **SQLite** evaluates the lookups row by row with `oxyde_array_match()`, a
+  function Oxyde registers on its own connections. The database file stays
+  plain SQLite, and other tools can read and write it as usual. Only the
+  generated SQL needs Oxyde: SQL from `.sql()` that contains an array lookup
+  does not run in the `sqlite3` shell or other tools. For the same reason,
+  do not reference `oxyde_array_match()` in views, triggers or CHECK
+  constraints.
+
 ## Q Expressions
 
 For complex boolean logic (OR, NOT):
@@ -230,6 +305,12 @@ users = await User.objects.filter(status="active").exclude(role="bot").all()
 ### Boolean Fields
 
 - `exact`
+- `in`, `isnull`
+
+### Array and JSON Fields
+
+- `exact`
+- `contains`, `contained_by`, `overlap` (see [Array Lookups](#array-lookups))
 - `in`, `isnull`
 
 ### UUID Fields
