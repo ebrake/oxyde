@@ -33,7 +33,7 @@ class PgArrayOverrides(Model):
     ratios: list[float] | None = Field(default=None, db_type="FLOAT(24)[]")
     blobs: list[bytes] | None = None
     # Elements are JSON text: '"a"' is stored as the JSON string "a"
-    docs: list[str] | None = Field(default=None, db_type="JSONB[]")
+    docs: list[str | None] | None = Field(default=None, db_type="JSONB[]")
 
     class Meta:
         is_table = True
@@ -483,6 +483,16 @@ class TestPostgresArrayCasts:
         assert rows[0].docs == ["hello", "world"]
         assert rows[0].blobs == [b"\x00ab", b"cd"]
         assert rows[0].stamps == [datetime(2024, 1, 1, 8, 0, tzinfo=timezone.utc)]
+
+        # A JSON null element loads as None and matches a None operand.
+        await PgArrayOverrides.objects.create(docs=["null"], using=db.name)
+        for lookup in ("contains", "contained_by", "overlap"):
+            assert await count(**{f"docs__{lookup}": [None]}) == 1, lookup
+        # Integers past 2^53 are fine when a double holds them exactly.
+        await PgArrayOverrides.objects.create(ratios=[float(2**54)], using=db.name)
+        assert await count(ratios__contains=[2**54]) == 1
+        with pytest.raises(RuntimeError):
+            await count(ratios__contains=[2**54 + 1])
 
 
 class TestSqliteInterop:

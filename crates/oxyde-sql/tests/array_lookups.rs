@@ -317,9 +317,12 @@ fn mysql_decimal_cast_is_guarded_against_values_it_cannot_take() {
     let l = "JSON_UNQUOTE(oxyde_l.oxyde_v)";
     // Each guard is a CASE branch before the cast, in this order.
     let guards = [
-        // JSON null elements read as SQL NULL and match only each other.
-        "CASE WHEN oxyde_l.oxyde_v IS NULL OR oxyde_r.oxyde_v IS NULL \
-         THEN oxyde_l.oxyde_v IS NULL AND oxyde_r.oxyde_v IS NULL"
+        // JSON null elements (SQL NULL, or a JSON null before MySQL 8.0.21)
+        // match only each other.
+        "CASE WHEN (oxyde_l.oxyde_v IS NULL OR JSON_TYPE(oxyde_l.oxyde_v) = 'NULL') \
+         OR (oxyde_r.oxyde_v IS NULL OR JSON_TYPE(oxyde_r.oxyde_v) = 'NULL') \
+         THEN (oxyde_l.oxyde_v IS NULL OR JSON_TYPE(oxyde_l.oxyde_v) = 'NULL') \
+         AND (oxyde_r.oxyde_v IS NULL OR JSON_TYPE(oxyde_r.oxyde_v) = 'NULL')"
             .to_string(),
         "NOT IN ('STRING', 'INTEGER', 'UNSIGNED INTEGER', 'DECIMAL', 'DOUBLE')".to_string(),
         format!("{l} NOT REGEXP '^[-+]?([0-9]{{1,35}}([.][0-9]{{0,30}})?|[.][0-9]{{1,30}})([eE][-+]?[0-9]{{1,2}})?$' THEN FALSE"),

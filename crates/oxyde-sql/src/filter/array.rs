@@ -43,9 +43,6 @@ use crate::Dialect;
 /// Name of the SQLite function the driver registers for array lookups.
 pub const SQLITE_ARRAY_MATCH_FN: &str = sqlite_fn::FUNCTION;
 
-/// Largest integer magnitude an `f64` represents exactly (2^53).
-const MAX_EXACT_DOUBLE_INT: u64 = 1 << 53;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ArrayOp {
     Contains,
@@ -144,7 +141,8 @@ pub(crate) fn build_array_filter(
                     let array_type = pg_array_type(item, db_type)?;
                     check_pg_operand_range(&operand, &array_type)?;
                     let has_null = items.iter().any(rmpv::Value::is_nil);
-                    postgres_typed(col, op, &operand, &array_type, has_null)
+                    let json = matches!(item, ColumnTypeSpec::Json | ColumnTypeSpec::JsonBinary);
+                    postgres_typed(col, op, &operand, &array_type, has_null, json)
                 }
                 Dialect::Mysql => mysql(col, op, &operand, decimal),
                 Dialect::Sqlite => sqlite(col, op, &operand, decimal),
@@ -190,13 +188,21 @@ fn typed_element(value: &rmpv::Value, item: &ColumnTypeSpec) -> Result<Value> {
 
     let converted = match (item, value) {
         (S::BigInteger | S::Timedelta, V::Integer(n)) => n.as_i64().map(|i| Value::BigInt(Some(i))),
-        // Only integers a double holds exactly: beyond 2^53 the conversion
-        // would round into a different value.
-        #[allow(clippy::cast_precision_loss)]
+        // Only integers a double holds exactly; anything else would round
+        // into a different value. The round trip compares through i128, so
+        // i64::MAX (which rounds up to 2^63) cannot saturate back to itself.
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_lossless
+        )]
         (S::Double, V::Integer(n)) => n
             .as_i64()
-            .filter(|i| i.unsigned_abs() <= MAX_EXACT_DOUBLE_INT)
-            .map(|i| Value::Double(Some(i as f64))),
+            .map(i128::from)
+            .or_else(|| n.as_u64().map(i128::from))
+            .map(|i| (i as f64, i))
+            .filter(|&(f, i)| f as i128 == i)
+            .map(|(f, _)| Value::Double(Some(f))),
         (S::Double, V::F32(_) | V::F64(_)) => match bind_value(value, item) {
             Value::Double(Some(f)) if f.is_finite() => Some(Value::Double(Some(f))),
             _ => None,
@@ -448,6 +454,7 @@ fn postgres_typed(
     operand: &Value,
     array_type: &str,
     has_null: bool,
+    json: bool,
 ) -> SimpleExpr {
     let arg = format!("{{arg}}::{array_type}");
     if !has_null {
@@ -457,7 +464,13 @@ fn postgres_typed(
 
     let left = format!("unnest({PG_HELD}) AS {PG_LEFT}");
     let right = format!("unnest({arg}) AS {PG_RIGHT}");
-    let eq = r#""__oxyde_l"."__oxyde_v" IS NOT DISTINCT FROM "__oxyde_r"."__oxyde_v""#;
+    // A JSON null element loads as None, so it matches an SQL NULL operand
+    // element (and the other way round).
+    let eq = if json {
+        r#"COALESCE("__oxyde_l"."__oxyde_v", 'null'::jsonb) = COALESCE("__oxyde_r"."__oxyde_v", 'null'::jsonb)"#
+    } else {
+        r#""__oxyde_l"."__oxyde_v" IS NOT DISTINCT FROM "__oxyde_r"."__oxyde_v""#
+    };
     let body = pg_hold("{col}", &set_predicate(op, &left, &right, eq));
     let sql = format!("(CASE WHEN {{col}} IS NULL THEN NULL ELSE {body} END)");
     render(&sql, col, operand, Dialect::Postgres)
@@ -517,7 +530,8 @@ fn mysql(col: &SimpleExpr, op: ArrayOp, operand: &Value, decimal: bool) -> Simpl
     let right = "(SELECT CAST({arg} AS JSON) AS oxyde_j) AS oxyde_a \
          CROSS JOIN JSON_TABLE(oxyde_a.oxyde_j, '$[*]' COLUMNS (oxyde_v JSON PATH '$')) AS oxyde_r";
     // Elements, extracted once per row of each JSON_TABLE. The path always
-    // exists, so SQL NULL here is a JSON null element.
+    // exists, so SQL NULL here is a JSON null element; before MySQL 8.0.21,
+    // JSON_TABLE yields a JSON null instead, which `null` also accepts.
     let l = "oxyde_l.oxyde_v";
     let r = "oxyde_r.oxyde_v";
 
@@ -548,8 +562,10 @@ fn mysql(col: &SimpleExpr, op: ArrayOp, operand: &Value, decimal: bool) -> Simpl
              - LENGTH(SUBSTRING_INDEX({mantissa}, '.', 1)) \
              - CAST(REGEXP_SUBSTR({lt}, '[-+]?[0-9]+$') AS SIGNED))"
         );
+        let null = |x: &str| format!("({x} IS NULL OR JSON_TYPE({x}) = 'NULL')");
+        let (ln, rn) = (null(l), null(r));
         format!(
-            "CASE WHEN {l} IS NULL OR {r} IS NULL THEN {l} IS NULL AND {r} IS NULL \
+            "CASE WHEN {ln} OR {rn} THEN {ln} AND {rn} \
              WHEN JSON_TYPE({l}) NOT IN ('STRING', 'INTEGER', 'UNSIGNED INTEGER', 'DECIMAL', 'DOUBLE') \
              OR {lt} NOT REGEXP '{MYSQL_DECIMAL_LEXEME}' THEN FALSE \
              WHEN {lt} REGEXP '[eE]' \
@@ -943,6 +959,9 @@ mod tests {
                 ColumnTypeSpec::Double,
                 rmpv::Value::Integer((-(1_i64 << 53) - 1).into()),
             ),
+            // Rounds up to 2^63, which i64 cannot hold.
+            (ColumnTypeSpec::Double, rmpv::Value::Integer(i64::MAX.into())),
+            (ColumnTypeSpec::Double, rmpv::Value::Integer(u64::MAX.into())),
             (
                 ColumnTypeSpec::Enum {
                     name: "e".into(),
@@ -962,7 +981,7 @@ mod tests {
     #[test]
     #[allow(clippy::cast_precision_loss)]
     fn float_elements_accept_exactly_representable_integers() {
-        for n in [0_i64, 3, 1 << 53, -(1 << 53)] {
+        for n in [0_i64, 3, 1 << 53, -(1 << 53), 1 << 54, i64::MIN] {
             let value = typed_element(&rmpv::Value::Integer(n.into()), &ColumnTypeSpec::Double);
             assert_eq!(value.unwrap(), Value::Double(Some(n as f64)), "{n}");
         }
