@@ -672,7 +672,7 @@ fn like_on_json_columns_matches_the_unquoted_string() {
         let (sql, _) = case_sensitive.build(Dialect::Sqlite);
         assert!(
             sql.contains(
-                r#"(CASE WHEN json_valid("tags") THEN CASE json_type("tags") WHEN 'text' THEN json_extract("tags", '$') ELSE "tags" END ELSE "tags" END) LIKE ?"#
+                r#"(CASE WHEN json_valid("tags", 9) THEN CASE json_type("tags") WHEN 'text' THEN json_extract("tags", '$') ELSE "tags" END ELSE "tags" END) LIKE ?"#
             ),
             "{sql}"
         );

@@ -287,6 +287,26 @@ async fn blob_values_do_not_fail_the_query_and_jsonb_matches() {
 }
 
 #[tokio::test]
+async fn like_on_json_columns_reads_jsonb_strings() {
+    let (pool, _dir) = setup(PoolSettings::default()).await;
+
+    // A JSON string as text and as JSONB, and text that is not JSON.
+    execute_statement(
+        &pool,
+        "INSERT INTO items (id, doc) VALUES (4, '\"hello\"'), (5, jsonb('\"hello\"')), (6, 'hello')",
+        &[],
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(select_ids(&pool, "doc", "LIKE", s("hel%")).await, [4, 5, 6]);
+    // Arrays and objects still match their JSON text.
+    assert_eq!(select_ids(&pool, "doc", "LIKE", s("{%")).await, [3]);
+
+    close_pool(&pool).await.unwrap();
+}
+
+#[tokio::test]
 async fn function_is_registered_on_additional_and_replacement_connections() {
     let (pool, _dir) = setup(PoolSettings {
         max_connections: Some(4),

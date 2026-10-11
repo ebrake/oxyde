@@ -401,6 +401,19 @@ posts = await Post.objects.filter(
 
 This automatically adds the necessary JOINs to the query.
 
+### Related Fields Named Like Lookups
+
+When the last part of a key is both a lookup name and a field on the related
+model, a lookup the FK column itself supports wins; otherwise the key filters
+the related field:
+
+```python
+# Author has fields named `gt` and `year`
+filter(author__gt=5)        # author_id > 5 (FK columns support gt)
+filter(author__year=2020)   # author.year = 2020 (FK columns have no year lookup)
+filter(author__gt__exact=5) # author.gt = 5
+```
+
 ## Known Limitations
 
 ### Ambiguous Columns with JOIN

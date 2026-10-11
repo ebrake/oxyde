@@ -40,9 +40,6 @@ use crate::utils::bind::{
 use crate::utils::value::rmpv_to_json;
 use crate::Dialect;
 
-/// Name of the SQLite function the driver registers for array lookups.
-pub const SQLITE_ARRAY_MATCH_FN: &str = sqlite_fn::FUNCTION;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ArrayOp {
     Contains,
@@ -134,7 +131,10 @@ pub(crate) fn build_array_filter(
                 .map(|v| typed_element(v, item))
                 .collect::<Result<Vec<_>>>()?;
             // A jsonb[] operand "null" converts to a JSON null, which must
-            // match SQL NULL elements just as None does.
+            // match SQL NULL elements just as None does. Stored elements are
+            // SQL NULL (from None) or jsonb null (from "null"), and existing
+            // rows hold both, so null operands compare through COALESCE
+            // rather than the native operators.
             let has_null = items.iter().any(rmpv::Value::is_nil)
                 || elements
                     .iter()
@@ -625,7 +625,8 @@ fn sqlite(col: &SimpleExpr, op: ArrayOp, operand: &Value, decimal: bool) -> Simp
     // any text) is passed as its JSON text; every other value as is.
     let stored = "CASE WHEN json_valid({col}, 8) THEN json({col}) ELSE {col} END";
     let sql = format!(
-        "{SQLITE_ARRAY_MATCH_FN}({stored}, {{arg}}, '{}', '{mode}')",
+        "{}({stored}, {{arg}}, '{}', '{mode}')",
+        sqlite_fn::FUNCTION,
         op.name()
     );
     render(&sql, col, operand, Dialect::Sqlite)

@@ -35,7 +35,7 @@ Key Functions:
         Split "name__contains" into ("name", "contains").
         Returns ("name", "exact") if no __ present.
 
-    _build_lookup_conditions(model, field, lookup, value, meta) -> list[Condition]:
+    _build_lookup_conditions(model, field, lookup, value, meta, spec) -> list[Condition]:
         Convert a lookup into Condition objects for the IR.
 
     _resolve_column_meta(model, field) -> ColumnMeta:
@@ -137,11 +137,6 @@ def _lookup_category(meta: ColumnMeta) -> str:
     return desc.category if desc is not None else "generic"
 
 
-# Default for a ``spec`` argument that was not passed: None is a real spec
-# value (a field without a column type), so it cannot mark "not given".
-_UNSET: Any = object()
-
-
 def _field_spec(model_class: type[Model], meta: ColumnMeta) -> dict[str, Any] | None:
     """ColumnTypeSpec of a field, from its model's cached column_types."""
     cached = model_class._db_meta.column_types
@@ -168,15 +163,12 @@ def _supports_array_lookups(meta: ColumnMeta, spec: dict[str, Any] | None) -> bo
 
 
 def _allowed_lookups_for_meta(
-    meta: ColumnMeta, spec: dict[str, Any] | None = _UNSET
+    meta: ColumnMeta, spec: dict[str, Any] | None
 ) -> list[str]:
     """Get list of allowed lookups for a given field metadata.
 
-    Pass the field's ``spec`` (``_field_spec``) when it is at hand; otherwise
-    it is computed from ``meta``.
+    ``spec`` is the field's ColumnTypeSpec (``_field_spec``).
     """
-    if spec is _UNSET:
-        spec = column_type_for_meta(meta)
     category = _lookup_category(meta)
     lookups: list[str] = ["exact"]
     if category == "string":
@@ -379,17 +371,14 @@ def _build_lookup_conditions(
     lookup: str,
     value: Any,
     column_meta: ColumnMeta,
-    spec: dict[str, Any] | None = _UNSET,
+    spec: dict[str, Any] | None,
 ) -> list[Condition]:
     """Build query conditions for a given field lookup.
 
-    ``spec`` is the field's ColumnTypeSpec (``_field_spec``); it is looked up
-    when not given. Conditions on array and JSON fields carry the field's
-    db_type, which PostgreSQL casts values and operands to
-    (db_type="INTEGER[]"), for every operator.
+    ``spec`` is the field's ColumnTypeSpec (``_field_spec``). Conditions on
+    array and JSON fields carry the field's db_type, which PostgreSQL casts
+    values and operands to (db_type="INTEGER[]"), for every operator.
     """
-    if spec is _UNSET:
-        spec = _field_spec(model_class, column_meta)
     array_lookups = _supports_array_lookups(column_meta, spec)
     conditions = _lookup_conditions(
         field_name, lookup or "exact", value, column_meta, array_lookups
@@ -410,14 +399,21 @@ def _lookup_conditions(
     """Conditions for one lookup, without the db_type cast."""
     db_column = column_meta.db_column
 
-    if lookup in ARRAY_LOOKUPS and _is_array_lookup(
-        lookup, value, column_meta, array_lookups
-    ):
-        return [
-            _build_array_condition(
-                field_name, lookup, value, column_meta, array_lookups
-            )
-        ]
+    if lookup in ARRAY_LOOKUPS:
+        # ``array_lookups`` is the field's ``_supports_array_lookups``.
+        # ``contains`` keeps its LIKE meaning on other fields, and for a string
+        # value on a str field, including str fields stored as JSON.
+        string_contains = lookup == "contains" and (
+            not array_lookups
+            or (isinstance(value, str) and _lookup_category(column_meta) == "string")
+        )
+        if not string_contains:
+            if not array_lookups:
+                raise FieldLookupError(
+                    f"Lookup '{lookup}' requires an array or JSON field, "
+                    f"got '{field_name}' of type {column_meta.python_type}"
+                )
+            return [_build_array_condition(field_name, lookup, value, column_meta)]
 
     if lookup == "exact":
         if value is None:
@@ -540,42 +536,16 @@ def _lookup_conditions(
     raise FieldLookupError(f"Unsupported lookup '{lookup}' for field '{field_name}'")
 
 
-def _is_array_lookup(
-    lookup: str, value: Any, meta: ColumnMeta, array_lookups: bool
-) -> bool:
-    """Whether a contains/contained_by/overlap lookup filters an array.
-
-    ``array_lookups`` is the field's ``_supports_array_lookups``. ``contains`` keeps
-    its LIKE meaning for a string value on a str field, including str fields
-    stored as JSON.
-    """
-    if lookup != "contains":
-        return True
-    if not array_lookups:
-        return False
-    return not (isinstance(value, str) and _lookup_category(meta) == "string")
-
-
 def _build_array_condition(
-    field_name: str,
-    lookup: str,
-    value: Any,
-    meta: ColumnMeta,
-    array_lookups: bool,
+    field_name: str, lookup: str, value: Any, meta: ColumnMeta
 ) -> Condition:
-    """Build an array containment/overlap condition.
+    """Build an array containment/overlap condition on an array or JSON field.
 
-    ``array_lookups`` is the field's ``_supports_array_lookups``. Matching is done by
-    the database: Rust validates the operand against the column's spec (from
-    the query's column_types) and picks the dialect's SQL.
+    Matching is done by the database: Rust validates the operand against the
+    column's spec (from the query's column_types) and picks the dialect's SQL.
     ``_build_lookup_conditions`` adds the field's db_type for the PostgreSQL
     operand cast.
     """
-    if not array_lookups:
-        raise FieldLookupError(
-            f"Lookup '{lookup}' requires an array or JSON field, "
-            f"got '{field_name}' of type {meta.python_type}"
-        )
     if not isinstance(value, (list, tuple)):
         raise FieldLookupValueError(
             f"Lookup '{lookup}' requires a list or tuple of values"

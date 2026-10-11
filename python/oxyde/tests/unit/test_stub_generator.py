@@ -319,6 +319,7 @@ class TestGenerateFilterParams:
         for time fields (the year/month/day builders raise for them)."""
         from oxyde.models.lookups import (
             _allowed_lookups_for_meta,
+            _field_spec,
             _resolve_column_meta,
         )
 
@@ -327,13 +328,15 @@ class TestGenerateFilterParams:
             starts_at: time = Field(default_factory=lambda: time(9, 0))
             created: datetime = Field(default_factory=datetime.now)
 
+        starts_at = _resolve_column_meta(Clocked, "starts_at")
         time_lookups = _allowed_lookups_for_meta(
-            _resolve_column_meta(Clocked, "starts_at")
+            starts_at, _field_spec(Clocked, starts_at)
         )
         assert "gt" in time_lookups and "between" in time_lookups
         assert not {"year", "month", "day"} & set(time_lookups)
 
-        dt_lookups = _allowed_lookups_for_meta(_resolve_column_meta(Clocked, "created"))
+        created = _resolve_column_meta(Clocked, "created")
+        dt_lookups = _allowed_lookups_for_meta(created, _field_spec(Clocked, created))
         assert {"year", "month", "day"} <= set(dt_lookups)
 
     def test_reserved_field_names_not_enumerated(self):

@@ -10,6 +10,8 @@ All notable changes to Oxyde are documented here.
 
 - UUID fields now support `gt`, `gte`, `lt`, `lte`, `between`, and `range` filters on PostgreSQL, SQLite, and MySQL. These use each database's UUID ordering and typed UUID parameters.
 - Array (`list[T]`) and JSON fields support `contains`, `contained_by`, and `overlap` lookups with a list or tuple on PostgreSQL, SQLite, and MySQL, including arrays of objects. Elements compare as complete values; order and duplicates are ignored. Operands are validated against the element type. On SQLite these lookups also read JSONB values, and call `oxyde_array_match()`, which Oxyde registers on every pooled connection, so the generated SQL needs an Oxyde connection to run. See [Array Lookups](guide/filtering.md#array-lookups).
+- A filter key ending in a related model's field name now filters that field when the FK column has no lookup of that name: `filter(author__year=2020)` previously raised `FieldLookupError`, and now filters `author.year`. Lookups the FK column supports keep their meaning (`author__gt=5` is `author_id > 5`). See [Related Fields Named Like Lookups](guide/filtering.md#related-fields-named-like-lookups).
+- `having()` recognizes annotation keys by their alias, not by lookup names: an alias ending in a lookup name (`tags__overlap`) is the alias, and an unsupported lookup on an alias (`total__bogus`) raises `ValueError` naming the alias rather than `FieldError`.
 
 ### Fixes
 
@@ -18,7 +20,7 @@ All notable changes to Oxyde are documented here.
 - **Array fields with a `db_type` override on PostgreSQL** — `filter(small=[1, 2])` and `small__in=[...]` on a field declared with `db_type="INTEGER[]"` (or another array type narrower than the default) failed with `operator does not exist: integer[] = bigint[]`. Values are now cast to the column's type.
 - `Decimal` values written with an exponent (`Decimal("1E+2")`) are now bound as decimals, not strings; in a `list[Decimal]` on PostgreSQL they were stored as NULL.
 - **Strings in JSON array fields on PostgreSQL** — in a `list[dict | str]` field, or a `list[str]` with `db_type="JSONB[]"`, a string that is not JSON text (`"hello"`) was stored as NULL. It is now stored as a plain JSON string, as on SQLite and MySQL; JSON text (`'"hello"'`, `'{"a": 1}'`) is still parsed. Array lookups read string operands the same way.
-- **String lookups on a `str` field stored as JSON** — `startswith`, `endswith`, `iexact`, `contains` and their case-insensitive forms compared against the quoted JSON text (`"hello"`) on MySQL and SQLite, so anchored lookups never matched a JSON string, and raised an error on PostgreSQL. They now match the string the field reads back as on all three backends; other JSON values still match their JSON text.
+- **String lookups on a `str` field stored as JSON** — `startswith`, `endswith`, `iexact`, `contains` and their case-insensitive forms compared against the quoted JSON text (`"hello"`) on MySQL and SQLite, so anchored lookups never matched a JSON string, and raised an error on PostgreSQL. They now match the string the field reads back as on all three backends, including JSONB values on SQLite; other JSON values still match their JSON text.
 
 ### Migrations
 

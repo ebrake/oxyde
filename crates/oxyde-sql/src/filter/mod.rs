@@ -3,5 +3,4 @@
 pub mod array;
 pub mod expression;
 
-pub use array::SQLITE_ARRAY_MATCH_FN;
 pub use expression::build_filter_node;

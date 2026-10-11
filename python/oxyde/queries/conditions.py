@@ -31,7 +31,7 @@ Creation:
         User.age >= 18        → Condition("age", ">=", 18)
 
     Or via lookups module:
-        _build_lookup_conditions(User, "name", "contains", "alice", meta)
+        _build_lookup_conditions(User, "name", "contains", "alice", meta, spec)
         → Condition("name", "LIKE", "%alice%")
 
 IR Format:

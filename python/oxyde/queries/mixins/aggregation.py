@@ -10,7 +10,6 @@ from typing_extensions import Self
 
 from oxyde._msgpack import msgpack
 from oxyde.core import ir
-from oxyde.models.lookups import ALL_LOOKUPS
 from oxyde.queries.aggregates import Avg, Max, Min, Sum
 from oxyde.queries.base import SupportsExecute, _resolve_execution_client
 from oxyde.queries.q import Q
@@ -319,16 +318,18 @@ class AggregationMixin(Generic[TModel]):
 def _split_having_key(key: str, annotations: Container[str] = ()) -> tuple[str, str]:
     """Split a having kwarg key into (field_name, lookup).
 
-    A key that is itself an annotation alias is that alias with "exact",
-    even when it ends in a lookup name ("tags__overlap").
+    Keys are matched against annotation aliases, not lookup names: an alias
+    is that alias with "exact", even when it ends in a lookup name
+    ("tags__overlap"), and an alias followed by one more part is that alias
+    with that lookup. Any other key is returned whole for the model path.
 
     Examples:
         "total__gt" -> ("total", "gt")
         "total"     -> ("total", "exact")
     """
-    if "__" not in key or key in annotations:
+    if key in annotations:
         return key, "exact"
-    parts = key.rsplit("__", 1)
-    if parts[1] in ALL_LOOKUPS:
-        return parts[0], parts[1]
+    head, sep, tail = key.rpartition("__")
+    if sep and head in annotations:
+        return head, tail
     return key, "exact"
