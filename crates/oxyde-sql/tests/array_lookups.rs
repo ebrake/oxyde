@@ -186,6 +186,24 @@ fn postgres_null_operand_elements_switch_to_null_aware_unnest() {
 }
 
 #[test]
+fn postgres_json_null_operand_elements_switch_to_null_aware_unnest() {
+    // '"null"' is stored as a jsonb null and None as an SQL NULL element;
+    // both load as None, so a JSON null operand must match either.
+    let spec = array_of(ColumnTypeSpec::JsonBinary);
+    for (op, sql_op) in OPS.iter().zip(["@>", "<@", "&&"]) {
+        let (sql, _) = Lookup::new(op, arr(vec![s("null")]), spec.clone()).build(Dialect::Postgres);
+        assert!(sql.contains("unnest($1::JSONB[])"), "{op}: {sql}");
+        assert!(sql.contains("COALESCE"), "{op}: {sql}");
+        assert!(!sql.contains(sql_op), "{op}: {sql}");
+
+        let (sql, _) =
+            Lookup::new(op, arr(vec![s(r#""x""#)]), spec.clone()).build(Dialect::Postgres);
+        assert!(sql.contains(sql_op), "{op}: {sql}");
+        assert!(!sql.contains("unnest"), "{op}: {sql}");
+    }
+}
+
+#[test]
 fn postgres_json_columns_compare_whole_elements_behind_a_type_guard() {
     let spec = ColumnTypeSpec::JsonBinary;
     let (sql, params) =

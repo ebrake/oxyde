@@ -133,6 +133,12 @@ pub(crate) fn build_array_filter(
                 .iter()
                 .map(|v| typed_element(v, item))
                 .collect::<Result<Vec<_>>>()?;
+            // A jsonb[] operand "null" converts to a JSON null, which must
+            // match SQL NULL elements just as None does.
+            let has_null = items.iter().any(rmpv::Value::is_nil)
+                || elements
+                    .iter()
+                    .any(|e| matches!(e, Value::Json(Some(j)) if j.is_null()));
             let operand = Value::Array(arr_type, Some(Box::new(elements)));
             let decimal = matches!(item, ColumnTypeSpec::Decimal { .. });
 
@@ -140,7 +146,6 @@ pub(crate) fn build_array_filter(
                 Dialect::Postgres => {
                     let array_type = pg_array_type(item, db_type)?;
                     check_pg_operand_range(&operand, &array_type)?;
-                    let has_null = items.iter().any(rmpv::Value::is_nil);
                     let json = matches!(item, ColumnTypeSpec::Json | ColumnTypeSpec::JsonBinary);
                     postgres_typed(col, op, &operand, &array_type, has_null, json)
                 }
@@ -465,7 +470,8 @@ fn postgres_typed(
     let left = format!("unnest({PG_HELD}) AS {PG_LEFT}");
     let right = format!("unnest({arg}) AS {PG_RIGHT}");
     // A JSON null element loads as None, so it matches an SQL NULL operand
-    // element (and the other way round).
+    // element (and the other way round); a JSON null operand ("null") does
+    // too.
     let eq = if json {
         r#"COALESCE("__oxyde_l"."__oxyde_v", 'null'::jsonb) = COALESCE("__oxyde_r"."__oxyde_v", 'null'::jsonb)"#
     } else {
@@ -960,8 +966,14 @@ mod tests {
                 rmpv::Value::Integer((-(1_i64 << 53) - 1).into()),
             ),
             // Rounds up to 2^63, which i64 cannot hold.
-            (ColumnTypeSpec::Double, rmpv::Value::Integer(i64::MAX.into())),
-            (ColumnTypeSpec::Double, rmpv::Value::Integer(u64::MAX.into())),
+            (
+                ColumnTypeSpec::Double,
+                rmpv::Value::Integer(i64::MAX.into()),
+            ),
+            (
+                ColumnTypeSpec::Double,
+                rmpv::Value::Integer(u64::MAX.into()),
+            ),
             (
                 ColumnTypeSpec::Enum {
                     name: "e".into(),

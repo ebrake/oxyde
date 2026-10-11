@@ -484,10 +484,13 @@ class TestPostgresArrayCasts:
         assert rows[0].blobs == [b"\x00ab", b"cd"]
         assert rows[0].stamps == [datetime(2024, 1, 1, 8, 0, tzinfo=timezone.utc)]
 
-        # A JSON null element loads as None and matches a None operand.
+        # "null" stores a JSON null element and None an SQL NULL one; both
+        # load as None, and either operand matches both.
         await PgArrayOverrides.objects.create(docs=["null"], using=db.name)
+        await PgArrayOverrides.objects.create(docs=[None], using=db.name)
         for lookup in ("contains", "contained_by", "overlap"):
-            assert await count(**{f"docs__{lookup}": [None]}) == 1, lookup
+            for operand in ([None], ["null"]):
+                assert await count(**{f"docs__{lookup}": operand}) == 2, (lookup, operand)
         # Integers past 2^53 are fine when a double holds them exactly.
         await PgArrayOverrides.objects.create(ratios=[float(2**54)], using=db.name)
         assert await count(ratios__contains=[2**54]) == 1
