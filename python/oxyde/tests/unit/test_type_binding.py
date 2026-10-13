@@ -211,6 +211,40 @@ def test_operator_binding(dialect, name, filters, expected):
     assert params == expected, f"[{dialect}] {name}: {params} != {expected}"
 
 
+@pytest.mark.parametrize("dialect", DIALECTS)
+@pytest.mark.parametrize("lookup", ["contains", "contained_by", "overlap"])
+@pytest.mark.parametrize(
+    "operand",
+    [
+        "0.00000000000000000000000000001E+1",
+        "1000000000000000000000000000000E-2",
+    ],
+)
+def test_decimal_array_lookup_normalizes_before_checking_limits(
+    dialect, lookup, operand
+):
+    _, params = TypeModel.objects.filter(
+        **{f"decimal_tags__{lookup}": [operand]}
+    ).sql(dialect=dialect, with_types=True)
+    assert params
+    for tag, (item_tag, values) in params:
+        assert tag == "Array"
+        assert item_tag == "Decimal"
+        assert [Decimal(value) for value in values] == [Decimal(operand)]
+
+
+@pytest.mark.parametrize("dialect", DIALECTS)
+@pytest.mark.parametrize("lookup", ["contains", "contained_by", "overlap"])
+@pytest.mark.parametrize("operand", ["1E-29", "8E+28"])
+def test_decimal_array_lookup_still_rejects_inexact_or_overflowing_values(
+    dialect, lookup, operand
+):
+    with pytest.raises(RuntimeError, match="not a valid decimal value"):
+        TypeModel.objects.filter(**{f"decimal_tags__{lookup}": [operand]}).sql(
+            dialect=dialect, with_types=True
+        )
+
+
 # ---- Multiple filters ----
 
 

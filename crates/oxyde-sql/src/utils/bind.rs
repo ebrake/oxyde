@@ -116,52 +116,68 @@ pub(crate) fn parse_decimal(s: &str) -> Option<Decimal> {
 /// `parse_decimal` without rounding: `None` for a value a `Decimal` cannot
 /// hold exactly (more than 28 fractional digits once trailing zeros go).
 pub(crate) fn parse_decimal_exact(s: &str) -> Option<Decimal> {
-    let (mantissa, exponent) = match s.split_once(['e', 'E']) {
-        Some((mantissa, exponent)) => (mantissa, Some(exponent)),
-        None => (s, None),
-    };
-    let exact = Decimal::from_str_exact(mantissa).or_else(|_| {
-        // Trailing fractional zeros do not change the value.
-        let trimmed = match mantissa.split_once('.') {
-            Some((int, frac)) => match frac.trim_end_matches('0') {
-                "" => int.to_string(),
-                frac => format!("{int}.{frac}"),
-            },
-            None => mantissa.to_string(),
-        };
-        Decimal::from_str_exact(&trimmed)
-    });
-    let mantissa = exact.ok()?;
-    match exponent {
-        // Zero is exact whatever its exponent ("0E-30" is Python's
-        // `str(Decimal)` of a zero with 30 places), but `from_scientific`
-        // rejects any exponent beyond ±28.
-        Some(exponent) if mantissa.is_zero() => exponent.parse::<i64>().ok().map(|_| Decimal::ZERO),
-        // Scaled by hand: `from_scientific` rejects any exponent beyond ±28
-        // before scaling, though "100E-29" and "0.001E+30" are exact.
-        Some(exponent) => {
-            let mantissa = mantissa.normalize();
-            let mut digits = mantissa.mantissa();
-            let mut scale = i64::from(mantissa.scale()) - exponent.parse::<i64>().ok()?;
-            // Integer trailing zeros make room for the exponent ("100E-29").
-            while scale > i64::from(Decimal::MAX_SCALE) && digits % 10 == 0 {
-                digits /= 10;
-                scale -= 1;
-            }
-            if scale < 0 {
-                let power = 10i128.checked_pow(u32::try_from(-scale).ok()?)?;
-                digits = digits.checked_mul(power)?;
-                scale = 0;
-            }
-            // More fractional digits than a Decimal holds is an error, not a
-            // rounding; so is a value beyond 96 bits.
-            let scale = u32::try_from(scale)
-                .ok()
-                .filter(|&s| s <= Decimal::MAX_SCALE)?;
-            Decimal::try_from_i128_with_scale(digits, scale).ok()
-        }
-        None => Some(mantissa),
+    // Keep the scale of ordinary decimal strings when they already fit.
+    if let Ok(decimal) = Decimal::from_str_exact(s) {
+        return Some(decimal);
     }
+    let (mantissa, exponent) = match s.split_once(['e', 'E']) {
+        Some((mantissa, exponent)) => (mantissa, exponent.parse::<i64>().ok()?),
+        None => (s, 0),
+    };
+    let (negative, unsigned) = match mantissa.as_bytes().first()? {
+        b'-' => (true, &mantissa[1..]),
+        b'+' => (false, &mantissa[1..]),
+        _ => (false, mantissa),
+    };
+
+    // Read the coefficient as text: it may exceed Decimal's limits before
+    // the exponent is applied (1e30 * 1e-2 is the exactly representable 1e28).
+    let mut coefficient = String::with_capacity(unsigned.len());
+    let mut fractional_digits = 0i64;
+    let mut point = false;
+    for byte in unsigned.bytes() {
+        match byte {
+            b'0'..=b'9' => {
+                coefficient.push(char::from(byte));
+                if point {
+                    fractional_digits = fractional_digits.checked_add(1)?;
+                }
+            }
+            b'.' if !point => point = true,
+            // Decimal accepts separators after the first digit.
+            b'_' if !coefficient.is_empty() => {}
+            _ => return None,
+        }
+    }
+    if coefficient.is_empty() {
+        return None;
+    }
+    let significant = coefficient.trim_start_matches('0');
+    // Zero is exact whatever its exponent, without any scale arithmetic.
+    if significant.is_empty() {
+        return Some(Decimal::ZERO);
+    }
+
+    // Remove only zeros, never significant digits, before imposing either
+    // the 96-bit coefficient limit or the 28-place scale limit.
+    let digits = significant.trim_end_matches('0');
+    let trailing_zeros = i64::try_from(significant.len() - digits.len()).ok()?;
+    let mut scale = fractional_digits
+        .checked_sub(exponent)?
+        .checked_sub(trailing_zeros)?;
+    let mut digits = digits.parse::<i128>().ok()?;
+    if negative {
+        digits = -digits;
+    }
+    if scale < 0 {
+        let power = 10i128.checked_pow(u32::try_from(scale.checked_neg()?).ok()?)?;
+        digits = digits.checked_mul(power)?;
+        scale = 0;
+    }
+    let scale = u32::try_from(scale)
+        .ok()
+        .filter(|&s| s <= Decimal::MAX_SCALE)?;
+    Decimal::try_from_i128_with_scale(digits, scale).ok()
 }
 
 #[must_use]
@@ -710,6 +726,18 @@ mod tests {
             ("1.500E-27", Decimal::new(15, 28)),
             ("0.001E+30", huge),
             ("1E+2", Decimal::from(100)),
+            // The mantissa itself does not fit, but the final value does.
+            ("0.00000000000000000000000000001E+1", Decimal::new(1, 28)),
+            (
+                "1000000000000000000000000000000E-2",
+                Decimal::from_i128_with_scale(10i128.pow(28), 0),
+            ),
+            ("-0.00000000000000000000000000001E+1", -Decimal::new(1, 28)),
+            (
+                "-1000000000000000000000000000000E-2",
+                -Decimal::from_i128_with_scale(10i128.pow(28), 0),
+            ),
+            ("792281625142643375935439503350E-1", Decimal::MAX),
         ] {
             assert_eq!(parse_decimal_exact(text), Some(expected), "{text}");
         }
@@ -719,9 +747,40 @@ mod tests {
             "1.001E-28",
             "1E+29",
             "8E+28",
+            "79228162514264337593543950336E-1",
             "1E-99999999999999999999",
         ] {
             assert_eq!(parse_decimal_exact(text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn exact_decimal_extreme_exponents_do_not_overflow() {
+        for text in [
+            "1E-9223372036854775808",
+            "1.0E-9223372036854775808",
+            "10E+9223372036854775807",
+        ] {
+            assert_eq!(parse_decimal_exact(text), None, "{text}");
+        }
+        for text in ["0.0E-9223372036854775808", "0E+9223372036854775807"] {
+            assert_eq!(parse_decimal_exact(text), Some(Decimal::ZERO), "{text}");
+        }
+    }
+
+    #[test]
+    fn exact_decimal_normalization_validates_the_whole_mantissa() {
+        for text in ["1e", "1e1e1", "--1", "1.2.3E+1", "._0E+1", "__1E+2"] {
+            assert_eq!(parse_decimal_exact(text), None, "{text}");
+        }
+        for (text, expected) in [
+            ("+.5e1", Decimal::from(5)),
+            ("1_000.50E-2", Decimal::new(10005, 3)),
+            ("2.50", Decimal::new(250, 2)),
+        ] {
+            let value = parse_decimal_exact(text).unwrap();
+            assert_eq!(value, expected, "{text}");
+            assert_eq!(value.scale(), expected.scale(), "{text}");
         }
     }
 
