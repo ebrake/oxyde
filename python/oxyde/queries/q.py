@@ -49,14 +49,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from oxyde.core.ir import FilterNode, filter_and, filter_not, filter_or
-from oxyde.exceptions import FieldLookupError
-from oxyde.models.lookups import (
-    _allowed_lookups_for_meta,
-    _build_lookup_conditions,
-    _parse_lookup_path,
-    _resolve_column_meta,
-    _resolve_field_path,
-)
+from oxyde.models.lookups import _build_lookup_conditions, _resolve_lookup
 
 if TYPE_CHECKING:
     from oxyde.models.base import Model
@@ -134,56 +127,33 @@ class Q:
         conditions: list[FilterNode] = []
 
         for key, value in self._kwargs.items():
-            field_path, lookup = _parse_lookup_path(key)
+            # e.g. "name__icontains", or "user__age__gte" through FK relations
+            resolved, lookup, spec = _resolve_lookup(model_class, key)
+            column_meta = resolved.column_meta
 
-            # Single field (no FK traversal)
-            if len(field_path) == 1:
-                field_name = field_path[0]
-                column_meta = _resolve_column_meta(model_class, field_name)
-
-                if lookup not in _allowed_lookups_for_meta(column_meta):
-                    raise FieldLookupError(
-                        f"Lookup '{lookup}' is not supported for field '{field_name}'"
-                    )
-
-                field_conditions = _build_lookup_conditions(
-                    model_class,
-                    field_name,
-                    lookup,
-                    value,
-                    column_meta,
-                )
-                conditions.extend([c.to_ir() for c in field_conditions])
-            else:
-                # FK traversal (e.g., user__age__gte)
-                resolved = _resolve_field_path(model_class, field_path)
-
-                if lookup not in _allowed_lookups_for_meta(resolved.column_meta):
-                    raise FieldLookupError(
-                        f"Lookup '{lookup}' is not supported for field '{resolved.final_field}'"
-                    )
-
+            qualified_column = None
+            if resolved.joins:
+                join_path = "__".join(name for name, _ in resolved.joins)
                 # Add JOINs to query if provided
-                if query is not None and resolved.joins:
-                    join_path = "__".join(name for name, _ in resolved.joins)
+                if query is not None:
                     query._add_join_path(join_path)
-
-                # Build qualified column name: "alias.column"
-                # The alias is the join path with __ replaced by _
+                # Qualified column name "alias.column": the alias is the join
+                # path with __ replaced by _
                 alias = "_".join(name for name, _ in resolved.joins)
-                qualified_column = f"{alias}.{resolved.column_meta.db_column}"
+                qualified_column = f"{alias}.{column_meta.db_column}"
 
-                field_conditions = _build_lookup_conditions(
-                    resolved.final_model,
-                    resolved.final_field,
-                    lookup,
-                    value,
-                    resolved.column_meta,
-                )
-                # Override column with qualified name
+            field_conditions = _build_lookup_conditions(
+                resolved.final_model,
+                resolved.final_field,
+                lookup,
+                value,
+                column_meta,
+                spec,
+            )
+            if qualified_column is not None:
                 for cond in field_conditions:
                     cond.column = qualified_column
-                conditions.extend([c.to_ir() for c in field_conditions])
+            conditions.extend([c.to_ir() for c in field_conditions])
 
         if not conditions:
             return None

@@ -12,6 +12,7 @@ class Item(Model):
     name: str = Field(default="")
     qty: int = Field(default=0)
     key: UUID | None = Field(default=None)
+    tags: list[str] = Field(default_factory=list)
 
     class Meta:
         is_table = True

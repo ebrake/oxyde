@@ -41,11 +41,20 @@
 //!
 //! # Serialization
 //!
-//! ```rust,ignore
-//! let ir = QueryIR::from_msgpack(bytes)?;
+//! ```rust
+//! use oxyde_codec::QueryIR;
+//!
+//! let original = QueryIR {
+//!     table: "events".into(),
+//!     cols: Some(vec!["id".into()]),
+//!     ..Default::default()
+//! };
+//! let bytes = rmp_serde::to_vec_named(&original)?;
+//! let ir = QueryIR::from_msgpack(&bytes)?;
 //! ir.validate()?; // Check structure, not data
-//! // ... generate SQL
-//! let result_bytes = serialize_results(rows)?;
+//! assert_eq!(ir.table, "events");
+//! assert_eq!(ir.cols, Some(vec!["id".into()]));
+//! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
 //! # Validation
@@ -170,6 +179,37 @@ pub struct Filter {
     pub column: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub escape: Option<String>,
+    /// Verbatim `db_type` override of the filtered field, sent for array and
+    /// JSON fields. PostgreSQL array values and array-lookup operands are
+    /// cast to it (e.g. `INTEGER[]` where the spec alone would say
+    /// `BIGINT[]`), and array lookups on a `JSON` column cast the column.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub db_type: Option<String>,
+}
+
+/// Contract of the `oxyde_array_match(stored, operand, operator, items)`
+/// SQLite function behind array lookups: `oxyde-sql` emits calls to it and
+/// `oxyde-driver` registers it, so both read its names from here.
+pub mod sqlite_array_match {
+    use std::ffi::CStr;
+
+    /// Function name, as registered with SQLite.
+    pub const FUNCTION_C: &CStr = c"oxyde_array_match";
+    /// Function name, as written in SQL.
+    pub const FUNCTION: &str = match FUNCTION_C.to_str() {
+        Ok(name) => name,
+        Err(_) => panic!("function name must be UTF-8"),
+    };
+
+    /// `operator` argument values (the lookup names).
+    pub const CONTAINS: &str = "contains";
+    pub const CONTAINED_BY: &str = "contained_by";
+    pub const OVERLAP: &str = "overlap";
+
+    /// `items` argument: plain JSON elements.
+    pub const ITEMS_JSON: &str = "json";
+    /// `items` argument: typed decimal elements stored as numeric strings.
+    pub const ITEMS_DECIMAL: &str = "decimal";
 }
 
 /// Filter node for complex logical expressions (Q-expressions)

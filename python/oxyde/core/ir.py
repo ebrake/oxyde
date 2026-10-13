@@ -79,8 +79,14 @@ def filter_condition(
     *,
     column: str | None = None,
     escape: str | None = None,
+    db_type: str | None = None,
 ) -> FilterNode:
-    """Create a simple condition node."""
+    """Create a simple condition node.
+
+    ``db_type`` is the filtered field's db_type override, sent for array and
+    JSON fields: PostgreSQL casts array values and array-lookup operands to
+    it.
+    """
     payload: FilterNode = {
         "type": "condition",
         "field": field,
@@ -91,6 +97,8 @@ def filter_condition(
         payload["column"] = column
     if escape is not None:
         payload["escape"] = escape
+    if db_type is not None:
+        payload["db_type"] = db_type
     return payload
 
 

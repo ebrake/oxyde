@@ -129,19 +129,17 @@ async def typed_db(request, tmp_path, _pg_container, _mysql_container):
 
 class TestDbTypes:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("typed_db", ["postgres", "mysql"], indirect=True)
     async def test_varchar(self, typed_db):
         db, model = typed_db
-        if not _has(model,"varchar_val"):
-            pytest.skip("No varchar field on this dialect model")
         obj = await model.objects.create(varchar_val="hello world", using=db.name)
         fetched = await model.objects.get(id=obj.id, using=db.name)
         assert fetched.varchar_val == "hello world"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("typed_db", ["postgres", "mysql"], indirect=True)
     async def test_numeric_decimal(self, typed_db):
         db, model = typed_db
-        if not _has(model,"numeric_val") and not _has(model,"decimal_val"):
-            pytest.skip("No numeric/decimal field on this dialect model")
         field = "numeric_val" if _has(model,"numeric_val") else "decimal_val"
         val = Decimal("123.45")
         obj = await model.objects.create(**{field: val}, using=db.name)
@@ -158,6 +156,7 @@ class TestDbTypes:
         assert getattr(fetched, field) == data
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("typed_db", ["postgres", "mysql"], indirect=True)
     async def test_json(self, typed_db):
         db, model = typed_db
         field = None
@@ -165,24 +164,23 @@ class TestDbTypes:
             if _has(model,name):
                 field = name
                 break
-        if field is None:
-            pytest.skip("No JSON field on this dialect model")
+        assert field is not None
         data = {"key": "value", "nested": [1, 2]}
         obj = await model.objects.create(**{field: data}, using=db.name)
         fetched = await model.objects.get(id=obj.id, using=db.name)
         assert getattr(fetched, field) == data
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("typed_db", ["postgres"], indirect=True)
     async def test_uuid(self, typed_db):
         db, model = typed_db
-        if not _has(model,"uuid_val"):
-            pytest.skip("No UUID field on this dialect model")
         val = UUID("12345678-1234-5678-1234-567812345678")
         obj = await model.objects.create(uuid_val=val, using=db.name)
         fetched = await model.objects.get(id=obj.id, using=db.name)
         assert fetched.uuid_val == val
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("typed_db", ["postgres", "mysql"], indirect=True)
     async def test_timestamp(self, typed_db):
         db, model = typed_db
         field = None
@@ -190,38 +188,34 @@ class TestDbTypes:
             if _has(model,name):
                 field = name
                 break
-        if field is None:
-            pytest.skip("No timestamp field on this dialect model")
+        assert field is not None
         val = datetime(2024, 6, 15, 12, 30, 0)
         obj = await model.objects.create(**{field: val}, using=db.name)
         fetched = await model.objects.get(id=obj.id, using=db.name)
         assert getattr(fetched, field) == val
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("typed_db", ["postgres"], indirect=True)
     async def test_varchar_array(self, typed_db):
         db, model = typed_db
-        if not _has(model,"varchar_arr"):
-            pytest.skip("No varchar array on this dialect model")
         val = ["alpha", "beta"]
         obj = await model.objects.create(varchar_arr=val, using=db.name)
         fetched = await model.objects.get(id=obj.id, using=db.name)
         assert fetched.varchar_arr == val
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("typed_db", ["postgres"], indirect=True)
     async def test_uuid_array(self, typed_db):
         db, model = typed_db
-        if not _has(model,"uuid_arr"):
-            pytest.skip("No UUID array on this dialect model")
         val = [UUID("12345678-1234-5678-1234-567812345678")]
         obj = await model.objects.create(uuid_arr=val, using=db.name)
         fetched = await model.objects.get(id=obj.id, using=db.name)
         assert fetched.uuid_arr == val
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("typed_db", ["postgres"], indirect=True)
     async def test_int_array(self, typed_db):
         db, model = typed_db
-        if not _has(model,"int_arr"):
-            pytest.skip("No int array on this dialect model")
         val = [1, 2, 3]
         obj = await model.objects.create(int_arr=val, using=db.name)
         fetched = await model.objects.get(id=obj.id, using=db.name)

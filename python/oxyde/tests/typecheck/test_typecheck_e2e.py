@@ -10,8 +10,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-import oxyde
 import pytest
+
+import oxyde
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 OXYDE_PARENT = str(Path(oxyde.__file__).parent.parent)
@@ -63,6 +64,9 @@ def _stub_targets(work_dir: Path, usage_file: str) -> list[Path]:
 
 
 def _run_pyright(targets: list[Path], cwd: Path) -> subprocess.CompletedProcess[str]:
+    assert PYRIGHT_EXE is not None, (
+        "Install the pinned dev dependencies for Pyright tests"
+    )
     (cwd / "pyrightconfig.json").write_text(
         json.dumps({"typeCheckingMode": "standard", "extraPaths": [OXYDE_PARENT]})
     )
@@ -77,6 +81,7 @@ def _run_pyright(targets: list[Path], cwd: Path) -> subprocess.CompletedProcess[
 def _run_ty(
     targets: list[Path], cwd: Path, *, concise: bool = False
 ) -> subprocess.CompletedProcess[str]:
+    assert TY_EXE is not None, "Install the pinned dev dependencies for ty tests"
     return subprocess.run(
         [
             TY_EXE,
@@ -120,7 +125,6 @@ def test_mypy_accepts_generated_stubs(
     )
 
 
-@pytest.mark.skipif(PYRIGHT_EXE is None, reason="pyright is not installed")
 @pytest.mark.parametrize(
     ("fixture_dir", "model_module", "usage_file"),
     [(f[1], f[2], f[3]) for f in FIXTURES],
@@ -144,7 +148,6 @@ def test_pyright_accepts_generated_stubs(
     )
 
 
-@pytest.mark.skipif(TY_EXE is None, reason="ty is not installed")
 @pytest.mark.parametrize(
     ("fixture_dir", "model_module", "usage_file"),
     [(f[1], f[2], f[3]) for f in FIXTURES],
@@ -256,7 +259,6 @@ def test_mypy_flags_bad_usage(generate_stubs) -> None:
     _assert_flagged_exactly("mypy", result.stdout, work_dir, usage_file)
 
 
-@pytest.mark.skipif(PYRIGHT_EXE is None, reason="pyright is not installed")
 def test_pyright_flags_bad_usage(generate_stubs) -> None:
     fixture_dir, model_module, usage_file = _NEGATIVE_FIXTURE
     work_dir = generate_stubs(FIXTURES_DIR / fixture_dir, model_module)
@@ -266,7 +268,6 @@ def test_pyright_flags_bad_usage(generate_stubs) -> None:
     _assert_flagged_exactly("pyright", result.stdout, work_dir, usage_file)
 
 
-@pytest.mark.skipif(TY_EXE is None, reason="ty is not installed")
 def test_ty_flags_bad_usage(generate_stubs) -> None:
     fixture_dir, model_module, usage_file = _NEGATIVE_FIXTURE
     work_dir = generate_stubs(FIXTURES_DIR / fixture_dir, model_module)

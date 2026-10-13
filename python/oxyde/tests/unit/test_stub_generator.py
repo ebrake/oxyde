@@ -264,6 +264,45 @@ class TestGenerateFilterParams:
         assert "starts_at__month" not in params
         assert "starts_at__day" not in params
 
+    def test_array_and_json_fields_get_sequence_typed_array_lookups(self):
+        class Tagged(Model):
+            id: int = Field(db_pk=True)
+            tags: list[str] | None = None
+            ids: list[UUID] = Field(default_factory=list)
+            maybe: list[int | None] = Field(default_factory=list)
+            payload: dict | list | None = None
+            note: str = Field(default="", db_type="JSON")
+
+            class Meta:
+                is_table = True  # db_type is only read from table metadata
+
+        params = _generate_filter_params(Tagged)
+        for lookup in ("contains", "contained_by", "overlap"):
+            assert (
+                f"tags__{lookup}: list[str] | list[str | None] | list[None]"
+                " | tuple[str | None, ...] | None = None," in params
+            )
+            assert (
+                f"ids__{lookup}: list[UUID] | list[UUID | None] | list[None]"
+                " | tuple[UUID | None, ...] | None = None," in params
+            )
+            assert (
+                f"maybe__{lookup}: list[int] | list[int | None] | list[None]"
+                " | tuple[int | None, ...] | None = None," in params
+            )
+            assert (
+                f"payload__{lookup}: list[Any] | tuple[Any, ...] | None = None,"
+                in params
+            )
+        # A str field stored as JSON: `contains` also keeps its LIKE string form.
+        assert (
+            "note__contains: str | list[Any] | tuple[Any, ...] | None = None," in params
+        )
+        assert "note__overlap: list[Any] | tuple[Any, ...] | None = None," in params
+        assert "note__icontains: str | None = None," in params
+        assert "tags__icontains" not in params
+        assert "id__overlap" not in params
+
     def test_uuid_fields_get_typed_ranges_without_string_lookups(self):
         class Keyed(Model):
             id: UUID = Field(db_pk=True)
@@ -280,6 +319,7 @@ class TestGenerateFilterParams:
         for time fields (the year/month/day builders raise for them)."""
         from oxyde.models.lookups import (
             _allowed_lookups_for_meta,
+            _field_spec,
             _resolve_column_meta,
         )
 
@@ -288,13 +328,15 @@ class TestGenerateFilterParams:
             starts_at: time = Field(default_factory=lambda: time(9, 0))
             created: datetime = Field(default_factory=datetime.now)
 
+        starts_at = _resolve_column_meta(Clocked, "starts_at")
         time_lookups = _allowed_lookups_for_meta(
-            _resolve_column_meta(Clocked, "starts_at")
+            starts_at, _field_spec(Clocked, starts_at)
         )
         assert "gt" in time_lookups and "between" in time_lookups
         assert not {"year", "month", "day"} & set(time_lookups)
 
-        dt_lookups = _allowed_lookups_for_meta(_resolve_column_meta(Clocked, "created"))
+        created = _resolve_column_meta(Clocked, "created")
+        dt_lookups = _allowed_lookups_for_meta(created, _field_spec(Clocked, created))
         assert {"year", "month", "day"} <= set(dt_lookups)
 
     def test_reserved_field_names_not_enumerated(self):

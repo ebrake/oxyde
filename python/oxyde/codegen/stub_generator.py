@@ -11,12 +11,20 @@ import types
 from datetime import date, datetime, time
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, ForwardRef, Literal, Union, get_args, get_origin
+from typing import Any, ForwardRef, Literal, NamedTuple, Union, get_args, get_origin
 from uuid import UUID
 
 from oxyde.models.base import Model
-from oxyde.models.lookups import _allowed_lookups_for_meta, _resolve_column_meta
+from oxyde.models.lookups import (
+    ARRAY_LOOKUPS,
+    _allowed_lookups_for_meta,
+    _field_spec,
+    _lookup_category,
+    _resolve_column_meta,
+    _supports_array_lookups,
+)
 from oxyde.models.registry import registered_tables
+from oxyde.models.utils import _unpack_annotated, _unwrap_optional
 
 
 def _get_python_type_name(python_type: Any) -> str:
@@ -77,7 +85,33 @@ def _get_python_type_name(python_type: Any) -> str:
         return str(python_type).replace("typing.", "")
 
 
-def _filter_field_specs(model_class: type[Model]) -> dict[str, tuple[str, list[str]]]:
+class _FilterFieldSpec(NamedTuple):
+    type_name: str
+    lookups: list[str]
+    # Value type of contains/contained_by/overlap on array and JSON fields
+    array_value_type: str | None = None
+    # A str field stored as JSON: `contains` also takes a string (LIKE)
+    string_contains: bool = False
+
+
+def _array_value_type(python_type: Any) -> str:
+    """Operand type of an array lookup; ``Any`` elements unless a list[T] field.
+
+    ``None`` matches a null element, so elements may be ``None``. ``list`` is
+    invariant, so ``list[T]`` stays for a ``list[T]`` variable, and mypy infers
+    ``[None]`` as ``list[None]``; ``tuple`` is covariant and needs one form.
+    """
+    if get_origin(python_type) is list and (args := get_args(python_type)):
+        element, _ = _unwrap_optional(_unpack_annotated(args[0])[0])
+        name = _get_python_type_name(element)
+        return (
+            f"list[{name}] | list[{name} | None] | list[None]"
+            f" | tuple[{name} | None, ...]"
+        )
+    return "list[Any] | tuple[Any, ...]"
+
+
+def _filter_field_specs(model_class: type[Model]) -> dict[str, _FilterFieldSpec]:
     """Per-field filter value type and allowed lookups.
 
     Lookups come from the runtime lookup tables (``_allowed_lookups_for_meta``),
@@ -87,9 +121,8 @@ def _filter_field_specs(model_class: type[Model]) -> dict[str, tuple[str, list[s
     cannot serialize a model instance.
     """
     from oxyde.models.field import OxydeFieldInfo
-    from oxyde.models.utils import _unpack_annotated, _unwrap_optional
 
-    specs: dict[str, tuple[str, list[str]]] = {}
+    specs: dict[str, _FilterFieldSpec] = {}
     for field_name, field_info in model_class.model_fields.items():
         # Virtual fields (reverse FK, m2m) are not filterable columns
         if isinstance(field_info, OxydeFieldInfo):
@@ -99,7 +132,8 @@ def _filter_field_specs(model_class: type[Model]) -> dict[str, tuple[str, list[s
                 continue
 
         meta = _resolve_column_meta(model_class, field_name)
-        lookups = _allowed_lookups_for_meta(meta)
+        spec = _field_spec(model_class, meta)
+        lookups = _allowed_lookups_for_meta(meta, spec)
 
         if meta.foreign_key is not None:
             synthetic = model_class.model_fields.get(meta.db_column)
@@ -112,7 +146,15 @@ def _filter_field_specs(model_class: type[Model]) -> dict[str, tuple[str, list[s
             base_hint, _ = _unpack_annotated(field_info.annotation)
             python_type, _ = _unwrap_optional(base_hint)
 
-        specs[field_name] = (_get_python_type_name(python_type), lookups)
+        array_value_type = None
+        if _supports_array_lookups(meta, spec):
+            array_value_type = _array_value_type(python_type)
+        specs[field_name] = _FilterFieldSpec(
+            _get_python_type_name(python_type),
+            lookups,
+            array_value_type,
+            string_contains=_lookup_category(meta) == "string",
+        )
 
     return specs
 
@@ -125,7 +167,6 @@ def _get_field_info(model_class: type[Model]) -> dict[str, tuple[Any, bool]]:
     Excludes virtual fields (reverse FK, m2m) that don't map to DB columns.
     """
     from oxyde.models.field import OxydeFieldInfo
-    from oxyde.models.utils import _unpack_annotated, _unwrap_optional
 
     result = {}
 
@@ -175,9 +216,8 @@ def _generate_filter_params(model_class: type[Model]) -> str:
     """
     lines = []
 
-    for field_name, (type_name, lookups) in sorted(
-        _filter_field_specs(model_class).items()
-    ):
+    for field_name, spec in sorted(_filter_field_specs(model_class).items()):
+        type_name, lookups = spec.type_name, spec.lookups
         if field_name in _RESERVED_FILTER_PARAMS:
             continue
 
@@ -204,6 +244,11 @@ def _generate_filter_params(model_class: type[Model]) -> str:
                 lookup_type = "tuple[int, int] | list[int] | None"
             elif lookup == "day":
                 lookup_type = "tuple[int, int, int] | list[int] | None"
+            elif lookup in ARRAY_LOOKUPS and spec.array_value_type is not None:
+                if lookup == "contains" and spec.string_contains:
+                    lookup_type = f"str | {spec.array_value_type} | None"
+                else:
+                    lookup_type = f"{spec.array_value_type} | None"
             else:
                 lookup_type = f"{type_name} | None"
 
@@ -476,8 +521,6 @@ def _generate_model_class_stub(
     custom_methods: list[str],
 ) -> str:
     """Generate stub class definition for model (to avoid circular imports in .pyi)."""
-    from oxyde.models.utils import _unpack_annotated, _unwrap_optional
-
     model_name = model_class.__name__
     lines = [f"class {model_name}(Model):"]
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 import pytest
@@ -12,7 +12,7 @@ import pytest_asyncio
 from pydantic import computed_field
 
 from oxyde import AsyncDatabase, Field, Model, disconnect_all
-from oxyde.db.schema import create_tables, drop_tables
+from oxyde.db.schema import create_tables
 from oxyde.migrations.utils import detect_dialect
 from oxyde.models.registry import clear_registry, register_table
 from oxyde.models.utils import _unpack_annotated, _unwrap_optional
@@ -21,16 +21,14 @@ from oxyde.queries.raw import execute_raw
 # ── Testcontainers availability ────────────────────────────────────────
 
 try:
-    from testcontainers.postgres import PostgresContainer
     from testcontainers.mysql import MySqlContainer
+    from testcontainers.postgres import PostgresContainer
 
     HAS_CONTAINERS = True
 except ImportError:
     HAS_CONTAINERS = False
 
-_DIALECTS = ["sqlite"]
-if HAS_CONTAINERS:
-    _DIALECTS.extend(["postgres", "mysql"])
+_DIALECTS = ["sqlite", "postgres", "mysql"]
 
 
 # ── Models ─────────────────────────────────────────────────────────────
@@ -242,42 +240,172 @@ class RenamedChild(Model):
         table_name = "renamed_children"
 
 
+class ArrayDoc(Model):
+    """Array lookup targets: typed arrays plus JSON columns holding arrays."""
+
+    id: int | None = Field(default=None, db_pk=True)
+    name: str = Field(default="", max_length=50)
+    tags: list[str | None] | None = Field(default=None, db_nullable=True)
+    scores: list[int] | None = Field(default=None, db_nullable=True)
+    amounts: list[Annotated[Decimal, Field(max_digits=10, decimal_places=2)]] | None = Field(
+        default=None, db_nullable=True
+    )
+    ids: list[UUID] | None = Field(default=None, db_nullable=True)
+    # Naive TIMESTAMP[]: aware elements are stored (and matched) as UTC
+    times: list[datetime] | None = Field(default=None, db_nullable=True)
+    # JSONB[] on PostgreSQL, a JSON array elsewhere
+    items: list[dict | str] | None = Field(default=None, db_nullable=True)
+    # JSONB on PostgreSQL
+    payload: dict | list | None = Field(default=None, db_nullable=True)
+    # Plain json on PostgreSQL (no equality operator without a jsonb cast)
+    raw: list[Any] | dict | None = Field(default=None, db_nullable=True, db_type="JSON")
+
+    class Meta:
+        is_table = True
+        table_name = "array_docs"
+
+
+class ArrayNote(Model):
+    """Joins to ArrayDoc; its own `tags` column is text, not an array."""
+
+    id: int | None = Field(default=None, db_pk=True)
+    doc: ArrayDoc | None = Field(default=None, db_nullable=True)
+    tags: str = Field(default="", max_length=50)
+    labels: list[str] | None = Field(
+        default=None, db_nullable=True, db_column="label_list"
+    )
+    # A str field stored as JSON: `contains` with a string is LIKE
+    body: str | None = Field(default=None, db_nullable=True, db_type="JSON")
+
+    class Meta:
+        is_table = True
+        table_name = "array_notes"
+
+
+class ArrayShadow(Model):
+    """Array columns named like the aliases array lookups use internally."""
+
+    id: int | None = Field(default=None, db_pk=True)
+    name: str = Field(default="", max_length=50)
+    v: list[int | None] | None = Field(
+        default=None, db_nullable=True, db_column="__oxyde_v"
+    )
+    i: list[int | None] | None = Field(
+        default=None, db_nullable=True, db_column="oxyde_v"
+    )
+    j: list[str | None] | None = Field(
+        default=None, db_nullable=True, db_column="oxyde_j"
+    )
+    # JSONB on PostgreSQL, whose lookups walk elements under their own alias
+    c: dict | list | None = Field(default=None, db_nullable=True, db_column="oxyde_c")
+
+    class Meta:
+        is_table = True
+        table_name = "array_shadows"
+
+
+class ArrayShadowJson(Model):
+    """A JSON column named like the PostgreSQL element alias."""
+
+    id: int | None = Field(default=None, db_pk=True)
+    name: str = Field(default="", max_length=50)
+    v: dict | list | None = Field(
+        default=None, db_nullable=True, db_column="__oxyde_v"
+    )
+
+    class Meta:
+        is_table = True
+        table_name = "array_shadow_jsons"
+
+
 ALL_MODELS = [
     Event, AliasedEvent, Author, Category, Post, Comment, Tag, PostTag,
     AllTypes, NullableTypes, BytesModel, TdModel, Product, FactoryKeyed,
-    RenamedParent, RenamedChild,
+    RenamedParent, RenamedChild, ArrayDoc, ArrayNote, ArrayShadow, ArrayShadowJson,
 ]
 
 
 # ── Container fixtures (session-scoped) ────────────────────────────────
 
 
+def _enable_postgres_tls(container) -> None:
+    """Give the disposable server a certificate so SSL tests always run."""
+    commands = [
+        [
+            "openssl",
+            "req",
+            "-new",
+            "-x509",
+            "-nodes",
+            "-newkey",
+            "rsa:2048",
+            "-days",
+            "1",
+            "-subj",
+            "/CN=localhost",
+            "-keyout",
+            "/tmp/oxyde-test-server.key",
+            "-out",
+            "/tmp/oxyde-test-server.crt",
+        ],
+        ["chmod", "0600", "/tmp/oxyde-test-server.key"],
+    ]
+    for setting, value in [
+        ("ssl_cert_file", "/tmp/oxyde-test-server.crt"),
+        ("ssl_key_file", "/tmp/oxyde-test-server.key"),
+        ("ssl", "on"),
+    ]:
+        commands.append(
+            [
+                "psql",
+                "-U",
+                container.username,
+                "-d",
+                container.dbname,
+                "-c",
+                f"ALTER SYSTEM SET {setting} = '{value}'",
+            ]
+        )
+    commands.append(
+        [
+            "psql",
+            "-U",
+            container.username,
+            "-d",
+            container.dbname,
+            "-c",
+            "SELECT pg_reload_conf()",
+        ]
+    )
+    for command in commands:
+        result = container.get_wrapped_container().exec_run(command, user="postgres")
+        if result.exit_code != 0:
+            raise RuntimeError(f"PostgreSQL TLS setup failed: {result.output.decode()}")
+
+
 @pytest.fixture(scope="session")
 def _pg_container():
     if not HAS_CONTAINERS:
-        yield None
-        return
+        pytest.fail("Install the dev dependencies to run database integration tests")
+    container = PostgresContainer("postgres:16")
     try:
-        container = PostgresContainer("postgres:16")
         container.start()
+        _enable_postgres_tls(container)
         yield container
+    finally:
         container.stop()
-    except Exception:
-        yield None
 
 
 @pytest.fixture(scope="session")
 def _mysql_container():
     if not HAS_CONTAINERS:
-        yield None
-        return
+        pytest.fail("Install the dev dependencies to run database integration tests")
+    container = MySqlContainer("mysql:8")
     try:
-        container = MySqlContainer("mysql:8")
         container.start()
         yield container
+    finally:
         container.stop()
-    except Exception:
-        yield None
 
 
 # ── URL builders ───────────────────────────────────────────────────────
@@ -300,11 +428,11 @@ def _get_url(dialect: str, tmp_path, pg_container, mysql_container) -> str:
         return f"sqlite://{tmp_path / 'test.db'}"
     if dialect == "postgres":
         if pg_container is None:
-            pytest.skip("PostgreSQL container not available")
+            pytest.fail("PostgreSQL container not available")
         return _pg_url(pg_container)
     if dialect == "mysql":
         if mysql_container is None:
-            pytest.skip("MySQL container not available")
+            pytest.fail("MySQL container not available")
         return _mysql_url(mysql_container)
     pytest.fail(f"Unknown dialect: {dialect}")
 

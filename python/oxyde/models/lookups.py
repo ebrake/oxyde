@@ -24,6 +24,9 @@ Lookup Categories by Field Type:
     Boolean fields:
         exact, in, isnull
 
+    Array fields (list[T]) and JSON fields:
+        exact, contains, contained_by, overlap, in, isnull
+
     All fields:
         exact (default), in, isnull
 
@@ -32,7 +35,7 @@ Key Functions:
         Split "name__contains" into ("name", "contains").
         Returns ("name", "exact") if no __ present.
 
-    _build_lookup_conditions(model, field, lookup, value, meta) -> list[Condition]:
+    _build_lookup_conditions(model, field, lookup, value, meta, spec) -> list[Condition]:
         Convert a lookup into Condition objects for the IR.
 
     _resolve_column_meta(model, field) -> ColumnMeta:
@@ -52,6 +55,12 @@ SQL Mapping:
     iexact    → ILIKE '...'
     year/month/day → range conditions on date/datetime
 
+    On array and JSON fields, with a list or tuple value:
+    contains     → every given element is in the stored array
+    contained_by → every stored element is among the given ones
+    overlap      → at least one element in common
+    (A string ``contains`` on a str field stored as JSON keeps LIKE.)
+
 Example:
     User.objects.filter(
         name__icontains="alice",  # ILIKE '%alice%'
@@ -70,7 +79,7 @@ from typing import TYPE_CHECKING, Any
 
 from oxyde.core.types import TYPE_REGISTRY
 from oxyde.exceptions import FieldError, FieldLookupError, FieldLookupValueError
-from oxyde.models.metadata import ColumnMeta
+from oxyde.models.metadata import ColumnMeta, column_type_for_meta
 from oxyde.models.utils import _unpack_annotated, _unwrap_optional
 from oxyde.queries.base import _resolve_registered_model
 from oxyde.queries.conditions import Condition
@@ -96,10 +105,23 @@ BOOL_LOOKUPS: list[str] = []
 GENERIC_LOOKUPS: list[str] = []
 COMMON_LOOKUPS = ["in", "isnull"]
 DATE_PART_LOOKUPS = ["year", "month", "day"]
+ARRAY_LOOKUPS = ["contains", "contained_by", "overlap"]
+
+# Lookup → IR operator for array/JSON-array filters (evaluated in Rust/SQL)
+ARRAY_OPERATORS = {
+    "contains": "ARRAY_CONTAINS",
+    "contained_by": "ARRAY_CONTAINED_BY",
+    "overlap": "ARRAY_OVERLAP",
+}
 
 # All known lookups for path parsing
 ALL_LOOKUPS = frozenset(
-    ["exact"] + STRING_LOOKUPS + NUMERIC_LOOKUPS + COMMON_LOOKUPS + DATE_PART_LOOKUPS
+    ["exact"]
+    + STRING_LOOKUPS
+    + NUMERIC_LOOKUPS
+    + COMMON_LOOKUPS
+    + DATE_PART_LOOKUPS
+    + ARRAY_LOOKUPS
 )
 
 
@@ -115,8 +137,38 @@ def _lookup_category(meta: ColumnMeta) -> str:
     return desc.category if desc is not None else "generic"
 
 
-def _allowed_lookups_for_meta(meta: ColumnMeta) -> list[str]:
-    """Get list of allowed lookups for a given field metadata."""
+def _field_spec(model_class: type[Model], meta: ColumnMeta) -> dict[str, Any] | None:
+    """ColumnTypeSpec of a field, from its model's cached column_types."""
+    cached = model_class._db_meta.column_types
+    if cached is not None and meta.db_column in cached:
+        return cached[meta.db_column]
+    return column_type_for_meta(meta)
+
+
+def _supports_array_lookups(meta: ColumnMeta, spec: dict[str, Any] | None) -> bool:
+    """Whether the field supports array lookups.
+
+    ``spec`` is the field's ColumnTypeSpec (``_field_spec``). Typed arrays
+    (``list[T]``) and JSON columns qualify. Nested typed arrays
+    (``list[list[T]]``) do not: they have no array lookup semantics on
+    PostgreSQL; store them in a JSON column instead.
+    """
+    if _lookup_category(meta) not in ("generic", "string") or spec is None:
+        return False
+    kind = spec.get("kind")
+    if kind == "array":
+        item = spec.get("item") or {}
+        return item.get("kind") != "array"
+    return kind in ("json", "json_binary")
+
+
+def _allowed_lookups_for_meta(
+    meta: ColumnMeta, spec: dict[str, Any] | None
+) -> list[str]:
+    """Get list of allowed lookups for a given field metadata.
+
+    ``spec`` is the field's ColumnTypeSpec (``_field_spec``).
+    """
     category = _lookup_category(meta)
     lookups: list[str] = ["exact"]
     if category == "string":
@@ -136,6 +188,8 @@ def _allowed_lookups_for_meta(meta: ColumnMeta) -> list[str]:
         lookups.extend(BOOL_LOOKUPS)
     else:
         lookups.extend(GENERIC_LOOKUPS)
+    if _supports_array_lookups(meta, spec):
+        lookups.extend(ARRAY_LOOKUPS)
     lookups.extend(COMMON_LOOKUPS)
     # Deduplicate while preserving order
     seen: set[str] = set()
@@ -284,16 +338,82 @@ def _resolve_column_meta(model_class: type[Model], field_name: str) -> ColumnMet
     )
 
 
+def _resolve_lookup(
+    model_class: type[Model], key: str
+) -> tuple[ResolvedPath, str, dict[str, Any] | None]:
+    """Resolve a filter key to its field, its lookup and the field's spec.
+
+    A known lookup name ending the key is the lookup, as
+    ``_parse_lookup_path`` reads it. Only when that lookup is not allowed on
+    the field before it, and the whole key names a field through relations,
+    is the key that field with "exact": "window__overlap" filters a related
+    model's ``overlap`` field (FK columns have no array lookups), while
+    "vehicle__gt" stays ``gt`` on the FK even if Vehicle has a ``gt`` field.
+    """
+    field_path, lookup = _parse_lookup_path(key)
+    resolved = _resolve_field_path(model_class, field_path)
+    spec = _field_spec(resolved.final_model, resolved.column_meta)
+    if lookup in _allowed_lookups_for_meta(resolved.column_meta, spec):
+        return resolved, lookup, spec
+
+    try:
+        as_field = _resolve_field_path(model_class, [*field_path, lookup])
+    except (FieldError, FieldLookupError):
+        raise FieldLookupError(
+            f"Lookup '{lookup}' is not supported for field '{resolved.final_field}'"
+        ) from None
+    return as_field, "exact", _field_spec(as_field.final_model, as_field.column_meta)
+
+
 def _build_lookup_conditions(
     model_class: type[Model],
     field_name: str,
     lookup: str,
     value: Any,
     column_meta: ColumnMeta,
+    spec: dict[str, Any] | None,
 ) -> list[Condition]:
-    """Build query conditions for a given field lookup."""
-    lookup = lookup or "exact"
+    """Build query conditions for a given field lookup.
+
+    ``spec`` is the field's ColumnTypeSpec (``_field_spec``). Conditions on
+    array and JSON fields carry the field's db_type, which PostgreSQL casts
+    values and operands to (db_type="INTEGER[]"), for every operator.
+    """
+    array_lookups = _supports_array_lookups(column_meta, spec)
+    conditions = _lookup_conditions(
+        field_name, lookup or "exact", value, column_meta, array_lookups
+    )
+    if array_lookups and column_meta.db_type is not None:
+        for cond in conditions:
+            cond.db_type = column_meta.db_type
+    return conditions
+
+
+def _lookup_conditions(
+    field_name: str,
+    lookup: str,
+    value: Any,
+    column_meta: ColumnMeta,
+    array_lookups: bool,
+) -> list[Condition]:
+    """Conditions for one lookup, without the db_type cast."""
     db_column = column_meta.db_column
+
+    if lookup in ARRAY_LOOKUPS:
+        # ``array_lookups`` is the field's ``_supports_array_lookups``.
+        # ``contains`` keeps its LIKE meaning on other fields, and for a string
+        # value on a str field, including str fields stored as JSON.
+        string_contains = lookup == "contains" and (
+            not array_lookups
+            or (isinstance(value, str) and _lookup_category(column_meta) == "string")
+        )
+        if not string_contains:
+            if not array_lookups:
+                raise FieldLookupError(
+                    f"Lookup '{lookup}' requires an array or JSON field, "
+                    f"got '{field_name}' of type {column_meta.python_type}"
+                )
+            return [_build_array_condition(field_name, lookup, value, column_meta)]
 
     if lookup == "exact":
         if value is None:
@@ -416,6 +536,23 @@ def _build_lookup_conditions(
     raise FieldLookupError(f"Unsupported lookup '{lookup}' for field '{field_name}'")
 
 
+def _build_array_condition(
+    field_name: str, lookup: str, value: Any, meta: ColumnMeta
+) -> Condition:
+    """Build an array containment/overlap condition on an array or JSON field.
+
+    Matching is done by the database: Rust validates the operand against the
+    column's spec (from the query's column_types) and picks the dialect's SQL.
+    ``_build_lookup_conditions`` adds the field's db_type for the PostgreSQL
+    operand cast.
+    """
+    if not isinstance(value, (list, tuple)):
+        raise FieldLookupValueError(
+            f"Lookup '{lookup}' requires a list or tuple of values"
+        )
+    return Condition(field_name, ARRAY_OPERATORS[lookup], value, column=meta.db_column)
+
+
 def _ensure_date_inputs(value: Any, expected: int, label: str) -> tuple[int, ...]:
     """Validate and normalize date/time lookup inputs."""
     if isinstance(value, int) and expected == 1:
@@ -521,15 +658,21 @@ __all__ = [
     "GENERIC_LOOKUPS",
     "COMMON_LOOKUPS",
     "DATE_PART_LOOKUPS",
+    "ARRAY_LOOKUPS",
+    "ARRAY_OPERATORS",
     "ALL_LOOKUPS",
     "ResolvedPath",
     "_lookup_category",
+    "_field_spec",
+    "_supports_array_lookups",
     "_allowed_lookups_for_meta",
     "_split_lookup_key",
     "_parse_lookup_path",
     "_resolve_field_path",
     "_resolve_column_meta",
+    "_resolve_lookup",
     "_build_lookup_conditions",
+    "_build_array_condition",
     "_ensure_date_inputs",
     "_build_year_conditions",
     "_build_month_conditions",

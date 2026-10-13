@@ -79,6 +79,9 @@ async fn init_pool_inner(
                 let busy_timeout = busy_timeout_opt;
 
                 Box::pin(async move {
+                    // Array lookups call this; register before anything can query.
+                    crate::sqlite_functions::register(conn).await?;
+
                     // journal_mode and synchronous are persistent (saved to DB file)
                     if let Some(mode) = journal_mode {
                         let pragma = format!("PRAGMA journal_mode = {mode}");

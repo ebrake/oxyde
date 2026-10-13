@@ -263,6 +263,44 @@ class TestHavingMethod:
 
         assert ir["having"] is not None
 
+    def test_having_alias_ending_in_a_lookup_name(self):
+        """An alias like "tags__overlap" is the alias, not alias + lookup."""
+        query = (
+            Product.objects.filter()
+            .annotate(tags__overlap=Count("*"), total=Count("*"))
+            .group_by("category")
+            .having(tags__overlap=3, total__gt=1)
+        )
+        having = query.to_ir()["having"]
+        conditions = having["conditions"]
+
+        assert {c["field"]: c["operator"] for c in conditions} == {
+            "tags__overlap": "=",
+            "total": ">",
+        }
+
+    def test_having_unsupported_lookup_on_an_alias(self):
+        """A lookup having() cannot apply to an alias names the alias."""
+        query = Product.objects.annotate(total=Count("*")).group_by("category")
+        with pytest.raises(ValueError, match="Unsupported lookup 'bogus'"):
+            query.having(total__bogus=1)
+        with pytest.raises(ValueError, match="Unsupported lookup 'contains'"):
+            query.having(total__contains=1)
+
+    def test_having_model_keys_take_the_model_path(self):
+        """Keys that do not start with an alias are model field filters."""
+        query = (
+            Product.objects.annotate(total=Count("*"))
+            .group_by("category")
+            .having(name__startswith="a", total__gte=2)
+        )
+        conditions = query.to_ir()["having"]["conditions"]
+
+        assert {c["field"]: c["operator"] for c in conditions} == {
+            "total": ">=",
+            "name": "LIKE",
+        }
+
 
 class TestManagerAggregates:
     """Test manager aggregate methods."""

@@ -17,6 +17,8 @@ async def wrong() -> None:
     await Item.objects.filter(qty__gte="high").all()  # type-error
     await Item.objects.filter(qty__in="abc").all()  # type-error
     await Item.objects.filter(key__gt="not-a-uuid").all()  # type-error
+    await Item.objects.filter(tags__contains="rust").all()  # type-error
+    await Item.objects.filter(tags__overlap=[1]).all()  # type-error
     await Item.objects.order_by(123).all()  # type-error
     Item(name=5)  # type-error
     print((await Item.objects.first()).name)  # type-error

@@ -61,7 +61,10 @@ pub fn bind_value(value: &rmpv::Value, spec: &ColumnTypeSpec) -> Value {
             }
             ColumnTypeSpec::Array { item } => match element_array_type(item) {
                 Some(arr_type) => {
-                    let values: Vec<Value> = arr.iter().map(|v| bind_value(v, item)).collect();
+                    let values: Vec<Value> = arr
+                        .iter()
+                        .map(|v| coerce_element(bind_value(v, item), item))
+                        .collect();
                     Value::Array(arr_type, Some(Box::new(values)))
                 }
                 // Unknown / nested-array element types have no sea_query
@@ -72,6 +75,109 @@ pub fn bind_value(value: &rmpv::Value, spec: &ColumnTypeSpec) -> Value {
         },
         rmpv::Value::Ext(_, _) => Value::String(Some(Box::new(format!("{value}")))),
     }
+}
+
+/// Give an array element the one value kind its item spec stores; other
+/// values pass through unchanged.
+///
+/// - An aware/naive datetime takes the flavour of a `DateTime` /
+///   `DateTimeUtc` spec (via UTC).
+/// - Text that is not JSON becomes a plain JSON string in a `Json` /
+///   `JsonBinary` spec (JSON text was already parsed by `bind_value`).
+///
+/// PostgreSQL array binding drops elements of any other kind as NULL, and
+/// the JSON encoder (MySQL/SQLite) writes them in a format that array
+/// lookups would never match.
+pub(crate) fn coerce_element(value: Value, spec: &ColumnTypeSpec) -> Value {
+    match (spec, value) {
+        (ColumnTypeSpec::DateTime, Value::ChronoDateTimeUtc(Some(dt))) => {
+            Value::ChronoDateTime(Some(Box::new(dt.naive_utc())))
+        }
+        (ColumnTypeSpec::DateTimeUtc, Value::ChronoDateTime(Some(dt))) => {
+            Value::ChronoDateTimeUtc(Some(Box::new(dt.and_utc())))
+        }
+        (ColumnTypeSpec::Json | ColumnTypeSpec::JsonBinary, Value::String(Some(s))) => {
+            Value::Json(Some(Box::new(serde_json::Value::String(*s))))
+        }
+        (_, value) => value,
+    }
+}
+
+/// Parse a decimal string; Python's `str(Decimal)` may use an exponent.
+pub(crate) fn parse_decimal(s: &str) -> Option<Decimal> {
+    s.parse::<Decimal>()
+        .or_else(|_| Decimal::from_scientific(s))
+        .ok()
+        // Exact values the two parsers miss: zeros with a large exponent
+        // ("0E-30") and mantissas with long runs of trailing zeros.
+        .or_else(|| parse_decimal_exact(s))
+}
+
+/// `parse_decimal` without rounding: `None` for a value a `Decimal` cannot
+/// hold exactly (more than 28 fractional digits once trailing zeros go).
+pub(crate) fn parse_decimal_exact(s: &str) -> Option<Decimal> {
+    // Keep the scale of ordinary decimal strings when they already fit.
+    if let Ok(decimal) = Decimal::from_str_exact(s) {
+        return Some(decimal);
+    }
+    let (mantissa, exponent) = match s.split_once(['e', 'E']) {
+        Some((mantissa, exponent)) => (mantissa, exponent.parse::<i64>().ok()?),
+        None => (s, 0),
+    };
+    let (negative, unsigned) = match mantissa.as_bytes().first()? {
+        b'-' => (true, &mantissa[1..]),
+        b'+' => (false, &mantissa[1..]),
+        _ => (false, mantissa),
+    };
+
+    // Read the coefficient as text: it may exceed Decimal's limits before
+    // the exponent is applied (1e30 * 1e-2 is the exactly representable 1e28).
+    let mut coefficient = String::with_capacity(unsigned.len());
+    let mut fractional_digits = 0i64;
+    let mut point = false;
+    for byte in unsigned.bytes() {
+        match byte {
+            b'0'..=b'9' => {
+                coefficient.push(char::from(byte));
+                if point {
+                    fractional_digits = fractional_digits.checked_add(1)?;
+                }
+            }
+            b'.' if !point => point = true,
+            // Decimal accepts separators after the first digit.
+            b'_' if !coefficient.is_empty() => {}
+            _ => return None,
+        }
+    }
+    if coefficient.is_empty() {
+        return None;
+    }
+    let significant = coefficient.trim_start_matches('0');
+    // Zero is exact whatever its exponent, without any scale arithmetic.
+    if significant.is_empty() {
+        return Some(Decimal::ZERO);
+    }
+
+    // Remove only zeros, never significant digits, before imposing either
+    // the 96-bit coefficient limit or the 28-place scale limit.
+    let digits = significant.trim_end_matches('0');
+    let trailing_zeros = i64::try_from(significant.len() - digits.len()).ok()?;
+    let mut scale = fractional_digits
+        .checked_sub(exponent)?
+        .checked_sub(trailing_zeros)?;
+    let mut digits = digits.parse::<i128>().ok()?;
+    if negative {
+        digits = -digits;
+    }
+    if scale < 0 {
+        let power = 10i128.checked_pow(u32::try_from(scale.checked_neg()?).ok()?)?;
+        digits = digits.checked_mul(power)?;
+        scale = 0;
+    }
+    let scale = u32::try_from(scale)
+        .ok()
+        .filter(|&s| s <= Decimal::MAX_SCALE)?;
+    Decimal::try_from_i128_with_scale(digits, scale).ok()
 }
 
 #[must_use]
@@ -124,9 +230,9 @@ fn bind_string(s: &str, spec: &ColumnTypeSpec) -> Value {
             Ok(u) => Value::Uuid(Some(Box::new(u))),
             Err(_) => string_value(s),
         },
-        ColumnTypeSpec::Decimal { .. } => match s.parse::<Decimal>() {
-            Ok(d) => Value::Decimal(Some(Box::new(d))),
-            Err(_) => string_value(s),
+        ColumnTypeSpec::Decimal { .. } => match parse_decimal(s) {
+            Some(d) => Value::Decimal(Some(Box::new(d))),
+            None => string_value(s),
         },
         ColumnTypeSpec::Json | ColumnTypeSpec::JsonBinary => {
             match serde_json::from_str::<serde_json::Value>(s) {
@@ -175,7 +281,7 @@ fn typed_null(spec: &ColumnTypeSpec) -> Value {
 
 /// sea_query element type for an array item spec.
 /// `None` for items that sea_query arrays cannot carry (Unknown, nested arrays).
-fn element_array_type(item: &ColumnTypeSpec) -> Option<ArrayType> {
+pub(crate) fn element_array_type(item: &ColumnTypeSpec) -> Option<ArrayType> {
     match item {
         ColumnTypeSpec::BigInteger | ColumnTypeSpec::Timedelta => Some(ArrayType::BigInt),
         ColumnTypeSpec::Double => Some(ArrayType::Double),
@@ -214,7 +320,7 @@ pub(crate) fn quote_pg_type_path(name: &str) -> String {
         .join(".")
 }
 
-fn string_value(s: &str) -> Value {
+pub(crate) fn string_value(s: &str) -> Value {
     Value::String(Some(Box::new(s.to_string())))
 }
 
@@ -557,6 +663,124 @@ mod tests {
                 assert!(matches!(vals[1], Value::BigInt(None)));
             }
             other => panic!("expected Array(BigInt), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn datetime_array_elements_take_the_spec_flavour() {
+        let val = rmpv::Value::Array(vec![
+            s("2024-01-01T10:00:00+02:00"),
+            s("2024-01-01T10:00:00"),
+        ]);
+
+        match bind_value(&val, &array_of(ColumnTypeSpec::DateTime)) {
+            Value::Array(ArrayType::ChronoDateTime, Some(vals)) => {
+                let expected = NaiveDateTime::from_str("2024-01-01T08:00:00").unwrap();
+                assert_eq!(vals[0], Value::ChronoDateTime(Some(Box::new(expected))));
+                assert!(matches!(vals[1], Value::ChronoDateTime(Some(_))));
+            }
+            other => panic!("expected Array(ChronoDateTime), got {other:?}"),
+        }
+
+        match bind_value(&val, &array_of(ColumnTypeSpec::DateTimeUtc)) {
+            Value::Array(ArrayType::ChronoDateTimeUtc, Some(vals)) => {
+                let expected = NaiveDateTime::from_str("2024-01-01T10:00:00")
+                    .unwrap()
+                    .and_utc();
+                assert!(matches!(vals[0], Value::ChronoDateTimeUtc(Some(_))));
+                assert_eq!(vals[1], Value::ChronoDateTimeUtc(Some(Box::new(expected))));
+            }
+            other => panic!("expected Array(ChronoDateTimeUtc), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decimal_exponent_string() {
+        assert_eq!(
+            bind_value(&s("1E+2"), &decimal_spec()),
+            Value::Decimal(Some(Box::new(Decimal::from(100))))
+        );
+    }
+
+    #[test]
+    fn zero_decimals_with_any_exponent() {
+        for zero in ["0E-30", "0E+40", "-0E-50", "0.000E-99"] {
+            assert_eq!(parse_decimal_exact(zero), Some(Decimal::ZERO), "{zero}");
+            assert_eq!(parse_decimal(zero), Some(Decimal::ZERO), "{zero}");
+        }
+        assert_eq!(parse_decimal_exact("0Eabc"), None);
+        assert_eq!(parse_decimal("0Eabc"), None);
+        assert_eq!(
+            bind_value(&s("0E-30"), &decimal_spec()),
+            Value::Decimal(Some(Box::new(Decimal::ZERO)))
+        );
+    }
+
+    #[test]
+    fn exact_decimals_with_any_exponent() {
+        let tiny = Decimal::new(1, 27);
+        let huge = Decimal::from_i128_with_scale(10i128.pow(27), 0);
+        for (text, expected) in [
+            ("100E-29", tiny),
+            ("1000E-30", tiny),
+            ("1.500E-27", Decimal::new(15, 28)),
+            ("0.001E+30", huge),
+            ("1E+2", Decimal::from(100)),
+            // The mantissa itself does not fit, but the final value does.
+            ("0.00000000000000000000000000001E+1", Decimal::new(1, 28)),
+            (
+                "1000000000000000000000000000000E-2",
+                Decimal::from_i128_with_scale(10i128.pow(28), 0),
+            ),
+            ("-0.00000000000000000000000000001E+1", -Decimal::new(1, 28)),
+            (
+                "-1000000000000000000000000000000E-2",
+                -Decimal::from_i128_with_scale(10i128.pow(28), 0),
+            ),
+            ("792281625142643375935439503350E-1", Decimal::MAX),
+        ] {
+            assert_eq!(parse_decimal_exact(text), Some(expected), "{text}");
+        }
+        // Would round, or overflow 96 bits.
+        for text in [
+            "1E-29",
+            "1.001E-28",
+            "1E+29",
+            "8E+28",
+            "79228162514264337593543950336E-1",
+            "1E-99999999999999999999",
+        ] {
+            assert_eq!(parse_decimal_exact(text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn exact_decimal_extreme_exponents_do_not_overflow() {
+        for text in [
+            "1E-9223372036854775808",
+            "1.0E-9223372036854775808",
+            "10E+9223372036854775807",
+        ] {
+            assert_eq!(parse_decimal_exact(text), None, "{text}");
+        }
+        for text in ["0.0E-9223372036854775808", "0E+9223372036854775807"] {
+            assert_eq!(parse_decimal_exact(text), Some(Decimal::ZERO), "{text}");
+        }
+    }
+
+    #[test]
+    fn exact_decimal_normalization_validates_the_whole_mantissa() {
+        for text in ["1e", "1e1e1", "--1", "1.2.3E+1", "._0E+1", "__1E+2"] {
+            assert_eq!(parse_decimal_exact(text), None, "{text}");
+        }
+        for (text, expected) in [
+            ("+.5e1", Decimal::from(5)),
+            ("1_000.50E-2", Decimal::new(10005, 3)),
+            ("2.50", Decimal::new(250, 2)),
+        ] {
+            let value = parse_decimal_exact(text).unwrap();
+            assert_eq!(value, expected, "{text}");
+            assert_eq!(value.scale(), expected.scale(), "{text}");
         }
     }
 

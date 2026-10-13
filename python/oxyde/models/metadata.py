@@ -50,6 +50,7 @@ from typing import Any
 
 from pydantic.fields import PydanticUndefined
 
+from oxyde.core.column_types import compute_column_type
 from oxyde.models.decorators import Check, Index
 
 
@@ -127,6 +128,33 @@ class ModelMeta:
     pk_column: str | None = None
 
 
+def is_column_field(meta: ColumnMeta) -> bool:
+    """Whether a field is backed by its own column.
+
+    Virtual relation fields (reverse FK, m2m) and FK model fields
+    (author: Author) are not columns; the synthetic FK field (author_id) is.
+    """
+    return not (
+        meta.extra.get("reverse_fk")
+        or meta.extra.get("m2m")
+        or meta.foreign_key is not None
+    )
+
+
+def column_type_for_meta(meta: ColumnMeta) -> dict[str, Any] | None:
+    """ColumnTypeSpec dict of a field's column, or None when it has none
+    (see ``is_column_field``)."""
+    if not is_column_field(meta):
+        return None
+    return compute_column_type(
+        meta.python_type,
+        meta.db_type,
+        max_length=meta.max_length,
+        max_digits=meta.max_digits,
+        decimal_places=meta.decimal_places,
+    )
+
+
 class RelationDescriptorBase:
     """Marker base class for relation descriptors."""
 
@@ -139,4 +167,6 @@ __all__ = [
     "RelationInfo",
     "ModelMeta",
     "RelationDescriptorBase",
+    "column_type_for_meta",
+    "is_column_field",
 ]
