@@ -41,11 +41,20 @@
 //!
 //! # Serialization
 //!
-//! ```rust,ignore
-//! let ir = QueryIR::from_msgpack(bytes)?;
+//! ```rust
+//! use oxyde_codec::QueryIR;
+//!
+//! let original = QueryIR {
+//!     table: "events".into(),
+//!     cols: Some(vec!["id".into()]),
+//!     ..Default::default()
+//! };
+//! let bytes = rmp_serde::to_vec_named(&original)?;
+//! let ir = QueryIR::from_msgpack(&bytes)?;
 //! ir.validate()?; // Check structure, not data
-//! // ... generate SQL
-//! let result_bytes = serialize_results(rows)?;
+//! assert_eq!(ir.table, "events");
+//! assert_eq!(ir.cols, Some(vec!["id".into()]));
+//! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
 //! # Validation

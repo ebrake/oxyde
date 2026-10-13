@@ -83,7 +83,8 @@ python/oxyde/
 - **Python** 3.10+
 - **maturin** (`pip install maturin`)
 - **Docker** — integration tests spin up PostgreSQL/MySQL via testcontainers;
-  without Docker they are skipped and only unit/smoke tests run.
+  a full test run requires a running Docker engine. Unit/smoke tests run
+  without Docker.
 
 ## Development Setup
 
@@ -128,7 +129,7 @@ Day-to-day commands are `make` targets (see the `Makefile` at the repo root):
 |---|---|
 | `make build-core` | Rebuild the Rust extension (`maturin develop --release`) |
 | `make test-rust` | All Rust tests (`cargo test --workspace`) |
-| `make test` | All Python tests (integration auto-skips without Docker) |
+| `make test` | All Python tests (requires Docker and the dev dependencies) |
 | `make test-unit` / `test-smoke` / `test-integration` | One Python suite |
 | `make coverage` | Python tests with coverage |
 | `make lint` | Everything CI checks: ruff, mypy, cargo fmt/check/clippy |
@@ -179,10 +180,10 @@ Tests are split into suites under `python/oxyde/tests/`:
 - `unit/` — no database needed
 - `smoke/` — quick end-to-end sanity on SQLite
 - `integration/` — real PostgreSQL/MySQL via testcontainers (needs Docker)
-- `typecheck/` — mypy against generated stubs
+- `typecheck/` — mypy, Pyright, and ty against generated stubs
 
 ```bash
-make test          # all (integration is skipped automatically without Docker)
+make test          # all (requires Docker and the dev dependencies)
 make test-unit     # or test-smoke / test-integration
 make coverage
 

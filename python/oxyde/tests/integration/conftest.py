@@ -12,7 +12,7 @@ import pytest_asyncio
 from pydantic import computed_field
 
 from oxyde import AsyncDatabase, Field, Model, disconnect_all
-from oxyde.db.schema import create_tables, drop_tables
+from oxyde.db.schema import create_tables
 from oxyde.migrations.utils import detect_dialect
 from oxyde.models.registry import clear_registry, register_table
 from oxyde.models.utils import _unpack_annotated, _unwrap_optional
@@ -21,16 +21,14 @@ from oxyde.queries.raw import execute_raw
 # ── Testcontainers availability ────────────────────────────────────────
 
 try:
-    from testcontainers.postgres import PostgresContainer
     from testcontainers.mysql import MySqlContainer
+    from testcontainers.postgres import PostgresContainer
 
     HAS_CONTAINERS = True
 except ImportError:
     HAS_CONTAINERS = False
 
-_DIALECTS = ["sqlite"]
-if HAS_CONTAINERS:
-    _DIALECTS.extend(["postgres", "mysql"])
+_DIALECTS = ["sqlite", "postgres", "mysql"]
 
 
 # ── Models ─────────────────────────────────────────────────────────────
@@ -330,32 +328,84 @@ ALL_MODELS = [
 # ── Container fixtures (session-scoped) ────────────────────────────────
 
 
+def _enable_postgres_tls(container) -> None:
+    """Give the disposable server a certificate so SSL tests always run."""
+    commands = [
+        [
+            "openssl",
+            "req",
+            "-new",
+            "-x509",
+            "-nodes",
+            "-newkey",
+            "rsa:2048",
+            "-days",
+            "1",
+            "-subj",
+            "/CN=localhost",
+            "-keyout",
+            "/tmp/oxyde-test-server.key",
+            "-out",
+            "/tmp/oxyde-test-server.crt",
+        ],
+        ["chmod", "0600", "/tmp/oxyde-test-server.key"],
+    ]
+    for setting, value in [
+        ("ssl_cert_file", "/tmp/oxyde-test-server.crt"),
+        ("ssl_key_file", "/tmp/oxyde-test-server.key"),
+        ("ssl", "on"),
+    ]:
+        commands.append(
+            [
+                "psql",
+                "-U",
+                container.username,
+                "-d",
+                container.dbname,
+                "-c",
+                f"ALTER SYSTEM SET {setting} = '{value}'",
+            ]
+        )
+    commands.append(
+        [
+            "psql",
+            "-U",
+            container.username,
+            "-d",
+            container.dbname,
+            "-c",
+            "SELECT pg_reload_conf()",
+        ]
+    )
+    for command in commands:
+        result = container.get_wrapped_container().exec_run(command, user="postgres")
+        if result.exit_code != 0:
+            raise RuntimeError(f"PostgreSQL TLS setup failed: {result.output.decode()}")
+
+
 @pytest.fixture(scope="session")
 def _pg_container():
     if not HAS_CONTAINERS:
-        yield None
-        return
+        pytest.fail("Install the dev dependencies to run database integration tests")
+    container = PostgresContainer("postgres:16")
     try:
-        container = PostgresContainer("postgres:16")
         container.start()
+        _enable_postgres_tls(container)
         yield container
+    finally:
         container.stop()
-    except Exception:
-        yield None
 
 
 @pytest.fixture(scope="session")
 def _mysql_container():
     if not HAS_CONTAINERS:
-        yield None
-        return
+        pytest.fail("Install the dev dependencies to run database integration tests")
+    container = MySqlContainer("mysql:8")
     try:
-        container = MySqlContainer("mysql:8")
         container.start()
         yield container
+    finally:
         container.stop()
-    except Exception:
-        yield None
 
 
 # ── URL builders ───────────────────────────────────────────────────────
@@ -378,11 +428,11 @@ def _get_url(dialect: str, tmp_path, pg_container, mysql_container) -> str:
         return f"sqlite://{tmp_path / 'test.db'}"
     if dialect == "postgres":
         if pg_container is None:
-            pytest.skip("PostgreSQL container not available")
+            pytest.fail("PostgreSQL container not available")
         return _pg_url(pg_container)
     if dialect == "mysql":
         if mysql_container is None:
-            pytest.skip("MySQL container not available")
+            pytest.fail("MySQL container not available")
         return _mysql_url(mysql_container)
     pytest.fail(f"Unknown dialect: {dialect}")
 

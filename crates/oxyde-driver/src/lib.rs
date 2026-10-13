@@ -18,30 +18,67 @@
 //!
 //! # Pool Management
 //!
-//! ```rust,ignore
-//! init_pool("default", "postgresql://...", settings).await?;
-//! init_pool("analytics", "postgresql://...", settings).await?;
+//! ```rust
+//! use oxyde_driver::{close_all_pools, close_pool, init_pool, pool_backend,
+//!     DatabaseBackend, PoolSettings};
+//! # tokio::runtime::Runtime::new()?.block_on(async {
+//! init_pool("default", "sqlite::memory:", PoolSettings::default()).await?;
+//! init_pool("analytics", "sqlite::memory:", PoolSettings::default()).await?;
+//! assert_eq!(pool_backend("analytics").await?, DatabaseBackend::Sqlite);
 //! close_pool("analytics").await?;
+//! assert!(pool_backend("analytics").await.is_err());
 //! close_all_pools().await?;
+//! # Ok::<(), oxyde_driver::DriverError>(())
+//! # })?;
+//! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
 //! # Query Execution
 //!
-//! ```rust,ignore
+//! ```rust
+//! use oxyde_driver::{begin_transaction, close_all_pools, execute_query_columnar,
+//!     execute_query_columnar_in_transaction, init_pool, rollback_transaction,
+//!     PoolSettings};
+//! # tokio::runtime::Runtime::new()?.block_on(async {
+//! # init_pool("default", "sqlite::memory:", PoolSettings::default()).await?;
 //! // Outside transaction (with optional type hints for faster decoding)
-//! let rows = execute_query("default", sql, values, col_types.as_ref()).await?;
+//! let (rows, count) = execute_query_columnar("default", "SELECT 42 AS answer", &[], None).await?;
+//! assert_eq!(count, 1);
+//! assert!(!rows.is_empty());
 //!
 //! // Inside transaction
-//! let rows = execute_in_transaction(tx_id, sql, values).await?;
+//! let tx_id = begin_transaction("default").await?;
+//! let (tx_rows, tx_count) = execute_query_columnar_in_transaction(
+//!     tx_id, "SELECT 42 AS answer", &[], None,
+//! ).await?;
+//! assert_eq!((tx_rows, tx_count), (rows, count));
+//! rollback_transaction(tx_id).await?;
+//! # close_all_pools().await?;
+//! # Ok::<(), oxyde_driver::DriverError>(())
+//! # })?;
+//! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
 //! # Transaction API
 //!
-//! ```rust,ignore
+//! ```rust
+//! use oxyde_driver::{begin_transaction, close_all_pools, commit_transaction,
+//!     execute_query_columnar, execute_statement, execute_statement_in_transaction,
+//!     init_pool, PoolSettings};
+//! # tokio::runtime::Runtime::new()?.block_on(async {
+//! # let settings = PoolSettings { max_connections: Some(1), ..Default::default() };
+//! # init_pool("default", "sqlite::memory:", settings).await?;
+//! execute_statement("default", "CREATE TABLE events (id INTEGER PRIMARY KEY)", &[]).await?;
 //! let tx_id = begin_transaction("default").await?;
-//! execute_in_transaction(tx_id, sql1, values1).await?;
-//! execute_in_transaction(tx_id, sql2, values2).await?;
+//! execute_statement_in_transaction(tx_id, "INSERT INTO events VALUES (1)", &[]).await?;
+//! execute_statement_in_transaction(tx_id, "INSERT INTO events VALUES (2)", &[]).await?;
 //! commit_transaction(tx_id).await?;  // or rollback_transaction(tx_id)
+//! let (_, count) = execute_query_columnar("default", "SELECT id FROM events", &[], None).await?;
+//! assert_eq!(count, 2);
+//! # close_all_pools().await?;
+//! # Ok::<(), oxyde_driver::DriverError>(())
+//! # })?;
+//! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
 //! # Validation Strategy

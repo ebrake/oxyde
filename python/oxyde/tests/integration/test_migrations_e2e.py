@@ -109,7 +109,7 @@ async def _fk_exists(db_name: str, fk_name: str, dialect: str) -> bool:
             using=db_name,
         )
     else:
-        pytest.skip("FK introspection not implemented for sqlite")
+        pytest.fail("Named FK introspection only supports PostgreSQL and MySQL")
     return bool(rows)
 
 

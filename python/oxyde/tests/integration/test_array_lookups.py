@@ -12,7 +12,6 @@ from uuid import UUID
 import pytest
 
 from oxyde import Field, Model, Q
-from oxyde.migrations.utils import detect_dialect
 from oxyde.queries.raw import execute_raw
 
 from .conftest import ArrayDoc, ArrayNote, ArrayShadow, ArrayShadowJson
@@ -307,9 +306,8 @@ class TestStringLookupsOnJson:
         assert [(row.tags, row.body) for row in rows] == [("a", "hello")]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("db", ["sqlite"], indirect=True)
     async def test_non_json_text_on_sqlite(self, db):
-        if detect_dialect(db.url) != "sqlite":
-            pytest.skip("only SQLite stores a str that is not JSON")
         await ArrayNote.objects.create(tags="a", body="plain text", using=db.name)
         rows = await ArrayNote.objects.filter(body__startswith="plain").all(
             using=db.name
@@ -364,9 +362,8 @@ class TestDecimalArraysWithForeignValues:
     }
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("db", ["sqlite", "mysql"], indirect=True)
     async def test_only_numeric_elements_compare(self, db):
-        if detect_dialect(db.url) == "postgres":
-            pytest.skip("NUMERIC[] columns cannot hold non-numeric elements")
         for name, amounts in self.ROWS.items():
             await execute_raw(
                 "INSERT INTO array_docs (name, amounts) VALUES (?, ?)",
@@ -408,9 +405,8 @@ class TestDecimalArraysWithForeignValues:
 
 class TestPostgresArrayCasts:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("db", ["postgres"], indirect=True)
     async def test_operands_cast_to_overridden_column_types(self, db):
-        if detect_dialect(db.url) != "postgres":
-            pytest.skip("db_type array overrides are PostgreSQL DDL")
         await execute_raw("DROP TABLE IF EXISTS pg_array_overrides", using=db.name)
         await execute_raw(
             "CREATE TABLE pg_array_overrides ("
@@ -503,9 +499,8 @@ class TestSqliteInterop:
     itself stays plain SQLite for every other client."""
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("db", ["sqlite"], indirect=True)
     async def test_other_clients_share_the_file(self, db):
-        if detect_dialect(db.url) != "sqlite":
-            pytest.skip("SQLite file interop")
         ids = await _seed(db)
         path = db.url.removeprefix("sqlite://")
 

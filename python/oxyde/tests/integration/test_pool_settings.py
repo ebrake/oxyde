@@ -26,10 +26,8 @@ async def pool_db(request, tmp_path, _pg_container, _mysql_container):
 
 class TestPoolSettings:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("pool_db", ["postgres", "mysql"], indirect=True)
     async def test_ssl_mode(self, pool_db):
-        if pool_db.url.startswith("sqlite"):
-            pytest.skip("SSL not applicable to SQLite")
-
         if pool_db.url.startswith("postgres"):
             settings = PoolSettings(ssl_mode="require")
             query = "SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()"
@@ -38,12 +36,7 @@ class TestPoolSettings:
             query = "SHOW STATUS LIKE 'Ssl_cipher'"
 
         pool_db.settings = settings
-        try:
-            await pool_db.connect()
-        except RuntimeError as e:
-            if "does not support TLS" in str(e):
-                pytest.skip("Server does not support TLS")
-            raise
+        await pool_db.connect()
 
         rows = await execute_raw(query, using=pool_db.name)
 
@@ -54,10 +47,8 @@ class TestPoolSettings:
             assert rows[0]["Value"] != ""
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("pool_db", ["postgres"], indirect=True)
     async def test_pg_application_name(self, pool_db):
-        if not pool_db.url.startswith("postgres"):
-            pytest.skip("PostgreSQL-only setting")
-
         pool_db.settings = PoolSettings(pg_application_name="oxyde-test")
         await pool_db.connect()
 
@@ -69,10 +60,8 @@ class TestPoolSettings:
         assert rows[0]["application_name"] == "oxyde-test"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("pool_db", ["mysql"], indirect=True)
     async def test_mysql_charset(self, pool_db):
-        if not pool_db.url.startswith("mysql"):
-            pytest.skip("MySQL-only setting")
-
         pool_db.settings = PoolSettings(mysql_charset="utf8mb4")
         await pool_db.connect()
 
@@ -83,10 +72,8 @@ class TestPoolSettings:
         assert rows[0]["Value"] == "utf8mb4"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("pool_db", ["mysql"], indirect=True)
     async def test_mysql_collation(self, pool_db):
-        if not pool_db.url.startswith("mysql"):
-            pytest.skip("MySQL-only setting")
-
         pool_db.settings = PoolSettings(mysql_collation="utf8mb4_unicode_ci")
         await pool_db.connect()
 

@@ -7,11 +7,29 @@
 //!
 //! # Main Entry Points
 //!
-//! ```rust,ignore
+//! ```rust
+//! use oxyde_codec::{MigrationOp, QueryIR};
 //! use oxyde_sql::{build_sql, Dialect, Migration};
 //!
+//! let ir = QueryIR {
+//!     table: "events".into(),
+//!     cols: Some(vec!["id".into()]),
+//!     ..Default::default()
+//! };
 //! let (sql, values) = build_sql(&ir, Dialect::Postgres)?;
+//! assert_eq!(sql, "SELECT \"events\".\"id\" AS \"id\" FROM \"events\"");
+//! assert!(values.is_empty());
+//!
+//! let migration = Migration {
+//!     name: "rename_events".into(),
+//!     operations: vec![MigrationOp::RenameTable {
+//!         old_name: "events".into(),
+//!         new_name: "articles".into(),
+//!     }],
+//! };
 //! let ddl: Vec<String> = migration.to_sql(Dialect::Postgres)?;
+//! assert_eq!(ddl, vec!["ALTER TABLE \"events\" RENAME TO \"articles\""]);
+//! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
 //! # Dialect Support
