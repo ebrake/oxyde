@@ -339,9 +339,11 @@ fn encode_pg_array(buf: &mut Vec<u8>, row: &PgRow, idx: usize, item: &ColumnType
         ColumnTypeSpec::Json | ColumnTypeSpec::JsonBinary => {
             encode_pg_array_ref::<serde_json::Value>(buf, row, idx, write_json_value);
         }
-        // Unknown / nested / bytea element types — JSON array fallback.
-        // (Legacy had no bytea[] arm either; preserved as is.)
-        ColumnTypeSpec::Unknown | ColumnTypeSpec::Array { .. } | ColumnTypeSpec::Blob => {
+        ColumnTypeSpec::Blob => {
+            encode_pg_array_ref::<Vec<u8>>(buf, row, idx, |b, v| write_bin(b, v));
+        }
+        // Unknown / nested element types — JSON array fallback.
+        ColumnTypeSpec::Unknown | ColumnTypeSpec::Array { .. } => {
             match row.try_get::<Option<serde_json::Value>, _>(idx) {
                 Ok(Some(v)) => write_json_value(buf, &v),
                 Ok(None) => write_nil(buf),

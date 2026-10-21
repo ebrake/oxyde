@@ -10,9 +10,18 @@ All notable changes to Oxyde are documented here.
 
 - UUID fields now support `gt`, `gte`, `lt`, `lte`, `between`, and `range` filters on PostgreSQL, SQLite, and MySQL. These use each database's UUID ordering and typed UUID parameters.
 
-### Fixes
+### Bug Fixes
 
 - **Joins to a model with renamed columns** — `join()` and FK-traversal filters (`filter(author__name=...)`) failed with `no column found for name` when the related model's primary key set `db_column`, and on SQLite returned undecoded JSON for a related list/JSON field with `db_column`. Joined result columns are named by field, but the primary-key lookup and the column types used for decoding were keyed by column name.
+- **Array fields with a `db_type` override on PostgreSQL** — `filter(small=[1, 2])` and `small__in=[...]` on a field declared with `db_type="INTEGER[]"` (or another array type narrower than the default) failed with `operator does not exist: integer[] = bigint[]`. Values are now cast to the column's type. A value the type cannot hold (`100000` for `SMALLINT[]`) equals no row, so `exclude()` keeps every non-null row, and an array override Oxyde cannot read (`JSON[]`) raises an error naming it.
+- **`list[bytes]` fields on PostgreSQL** — saving one failed with `Unsupported parameter type for Postgres: Array(Bytes, None)`. They are now stored and loaded as `BYTEA[]`.
+- **Mixed timezone elements in `list[datetime]`** — an aware element of a naive `list[datetime]` field (or a naive element of a `TIMESTAMPTZ[]` one) was stored as NULL on PostgreSQL and in the other flavour's format on SQLite and MySQL. Elements are now converted to the field's flavour via UTC. Rows written before this fix keep the old values until they are saved again.
+- **`Decimal` values written with an exponent** — `Decimal("1E+2")` was bound as a string: saving it failed on PostgreSQL (`column is of type numeric but expression is of type text`), and in a `list[Decimal]` it was stored as NULL. It is now bound as a decimal.
+- **Strings in JSON array fields** — in a `list[dict | str]` field, or a `list[str]` with `db_type="JSONB[]"`, a string that is not JSON text (`"hello"`) was stored as NULL on PostgreSQL, and a string that is JSON text (`"123"`, `"null"`, `'{"a": 1}'`) was parsed into a number, null or object on every backend, so it read back as another type. String elements are now always stored as JSON strings, in filter values as on insert. Rows written before this fix keep the old values until they are saved again.
+- **Numbers and booleans in JSON array fields on PostgreSQL** — in a `list[dict | int]` field, numbers and booleans were stored as NULL. They are now stored as JSON values. In a `list[float]` or `list[Decimal]` filter, integer elements (`filter(ratios=[1, 2.5])`) were bound as NULL on PostgreSQL and as JSON integers on SQLite, so the filter never matched; they are now converted to the element type.
+- **String lookups on a `str` field stored as JSON** — `startswith`, `endswith`, `iexact`, `contains` and their case-insensitive forms compared against the quoted JSON text (`"hello"`) on MySQL and SQLite, so anchored lookups never matched a JSON string, and raised an error on PostgreSQL. They now match the string the field reads back as on all three backends, including JSONB values on SQLite.
+- **Filters on joined columns without a column type** — a filter on a related model's column that has no column type of its own (`filter(author__name=...)` where `name` has `db_type="CITEXT"`) was typed by the base model's column of the same name, so a base JSON or array column could change how the value was bound or compared. Joined columns now use only their own type.
+- Tuples in filter values are serialized like lists, so `UUID`, `Decimal` and `datetime` elements inside a tuple are converted as well.
 
 ### Migrations
 
