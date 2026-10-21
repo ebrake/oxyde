@@ -1,9 +1,11 @@
-//! SQL generation for filters on array and JSON columns across dialects.
+//! SQL generation for filters on array and JSON columns across dialects, and
+//! for HAVING conditions on aggregates.
 
 use std::collections::HashMap;
 
 use oxyde_codec::{Aggregate, AggregateOp, ColumnTypeSpec, Filter, FilterNode, QueryIR};
 use oxyde_sql::{build_sql, Dialect};
+use rust_decimal::Decimal;
 use sea_query::Value;
 
 fn array_of(item: ColumnTypeSpec) -> ColumnTypeSpec {
@@ -285,4 +287,144 @@ fn having_uses_the_aggregate_not_a_same_named_column() {
         let (sql, _) = build_sql(&ir, Dialect::Postgres).unwrap();
         assert!(sql.contains(&format!("HAVING {expected}")), "{sql}");
     }
+}
+
+fn aggregate(op: AggregateOp, field: &str, alias: &str) -> Aggregate {
+    Aggregate {
+        op,
+        field: Some(field.into()),
+        alias: Some(alias.into()),
+        distinct: None,
+    }
+}
+
+/// `posts` grouped by `status`, with `HAVING <alias of agg> <operator> value`.
+fn having_ir(
+    agg: Aggregate,
+    operator: &str,
+    value: rmpv::Value,
+    column_types: &[(&str, ColumnTypeSpec)],
+) -> QueryIR {
+    QueryIR {
+        table: "posts".into(),
+        cols: Some(vec!["status".into()]),
+        column_types: Some(
+            column_types
+                .iter()
+                .map(|(column, spec)| ((*column).into(), spec.clone()))
+                .collect(),
+        ),
+        group_by: Some(vec!["status".into()]),
+        having: Some(FilterNode::Condition(Filter {
+            field: agg.alias.clone().unwrap(),
+            operator: operator.into(),
+            value,
+            column: None,
+            escape: None,
+        })),
+        aggregates: Some(vec![agg]),
+        ..Default::default()
+    }
+}
+
+fn status_enum() -> ColumnTypeSpec {
+    ColumnTypeSpec::Enum {
+        name: "post_status_enum".into(),
+        values: vec!["draft".into(), "published".into()],
+    }
+}
+
+fn decimal(value: i64, scale: u32) -> Value {
+    Value::Decimal(Some(Box::new(Decimal::new(value, scale))))
+}
+
+#[test]
+fn having_binds_values_by_the_aggregate_result_type() {
+    let column_types = [
+        (
+            "price",
+            ColumnTypeSpec::Decimal {
+                precision: Some(10),
+                scale: Some(2),
+            },
+        ),
+        ("status", status_enum()),
+    ];
+    // Whether the alias is new, the aggregated column, or another column
+    // with a type of its own, MAX("price") is a decimal.
+    for alias in ["top", "price", "status"] {
+        let ir = having_ir(
+            aggregate(AggregateOp::Max, "price", alias),
+            ">",
+            s("5.5"),
+            &column_types,
+        );
+        let (sql, params) = build_sql(&ir, Dialect::Postgres).unwrap();
+        assert!(
+            sql.contains(r#"HAVING MAX("price") > $1"#),
+            "{alias}: {sql}"
+        );
+        assert_eq!(params, vec![decimal(55, 1)], "{alias}");
+    }
+}
+
+#[test]
+fn having_min_max_keep_the_column_casts() {
+    let ir = having_ir(
+        aggregate(AggregateOp::Min, "status", "first_status"),
+        "=",
+        s("draft"),
+        &[("status", status_enum())],
+    );
+    let (sql, _) = build_sql(&ir, Dialect::Postgres).unwrap();
+    assert!(
+        sql.contains(r#"HAVING MIN("status") = ($1::"post_status_enum")"#),
+        "{sql}"
+    );
+
+    let mut ir = having_ir(
+        aggregate(AggregateOp::Max, "tags", "top_tags"),
+        "=",
+        arr(vec![1.into(), 2.into()]),
+        &[("tags", array_of(ColumnTypeSpec::BigInteger))],
+    );
+    ir.column_db_types = Some(HashMap::from([("tags".into(), "INTEGER[]".into())]));
+    let (sql, _) = build_sql(&ir, Dialect::Postgres).unwrap();
+    assert!(
+        sql.contains(r#"HAVING MAX("tags") = ($1::INTEGER[])"#),
+        "{sql}"
+    );
+}
+
+#[test]
+fn having_sum_avg_of_integers_compare_as_exact_numerics() {
+    let column_types = [("views", ColumnTypeSpec::BigInteger)];
+    for op in [AggregateOp::Sum, AggregateOp::Avg] {
+        let ir = having_ir(
+            aggregate(op.clone(), "views", "v"),
+            ">",
+            s("2.5"),
+            &column_types,
+        );
+        let (_, params) = build_sql(&ir, Dialect::Postgres).unwrap();
+        assert_eq!(params, vec![decimal(25, 1)], "{op:?}");
+
+        let ir = having_ir(
+            aggregate(op.clone(), "views", "v"),
+            ">",
+            3.into(),
+            &column_types,
+        );
+        let (_, params) = build_sql(&ir, Dialect::Postgres).unwrap();
+        assert_eq!(params, vec![Value::BigInt(Some(3))], "{op:?}");
+    }
+
+    let ir = having_ir(
+        aggregate(AggregateOp::Count, "id", "n"),
+        ">=",
+        3.into(),
+        &column_types,
+    );
+    let (_, params) = build_sql(&ir, Dialect::Postgres).unwrap();
+    assert_eq!(params, vec![Value::BigInt(Some(3))]);
 }

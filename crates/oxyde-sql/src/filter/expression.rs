@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use oxyde_codec::{Aggregate, ColumnTypeSpec, Filter, FilterNode};
+use oxyde_codec::{Aggregate, AggregateOp, ColumnTypeSpec, Filter, FilterNode};
 use sea_query::{Expr, Func, LikeExpr, SimpleExpr, Value};
 
 use super::pg_array::{out_of_range_element, pg_array_type};
@@ -45,6 +45,43 @@ fn resolve_col_spec<'a>(
     col_types
         .and_then(|ct| ct.get(col_name))
         .unwrap_or(&ColumnTypeSpec::Unknown)
+}
+
+/// Type of an aggregate's result, for binding the values a HAVING condition
+/// compares it with: derived from the column it aggregates, never from a
+/// column that shares its alias.
+///
+/// MIN / MAX have the column's own type, `db_type` override included. SUM /
+/// AVG of an integer are exact numerics (`numeric` on PostgreSQL), so a
+/// `Decimal` value binds as a decimal; integers and floats bind as they are.
+fn aggregate_type<'a>(
+    agg: &Aggregate,
+    col_types: Option<&HashMap<String, ColumnTypeSpec>>,
+    db_types: Option<&'a HashMap<String, String>>,
+) -> (ColumnTypeSpec, Option<&'a str>) {
+    let field = agg.field.as_deref().unwrap_or("*");
+    let field_spec = resolve_col_spec(field, col_types);
+    match agg.op {
+        AggregateOp::Count => (ColumnTypeSpec::BigInteger, None),
+        AggregateOp::Min | AggregateOp::Max => (
+            field_spec.clone(),
+            db_types.and_then(|dt| dt.get(field)).map(String::as_str),
+        ),
+        AggregateOp::Sum | AggregateOp::Avg => {
+            let spec = match field_spec {
+                ColumnTypeSpec::Double => ColumnTypeSpec::Double,
+                ColumnTypeSpec::BigInteger | ColumnTypeSpec::Decimal { .. } => {
+                    ColumnTypeSpec::Decimal {
+                        precision: None,
+                        scale: None,
+                    }
+                }
+                ColumnTypeSpec::Timedelta => ColumnTypeSpec::Timedelta,
+                _ => ColumnTypeSpec::Unknown,
+            };
+            (spec, None)
+        }
+    }
 }
 
 /// PostgreSQL array type that a filter's array values are cast to: the
@@ -261,14 +298,13 @@ fn apply_filter(
     let agg_match =
         aggregates.and_then(|aggs| aggs.iter().find(|a| a.alias.as_deref() == Some(col_name)));
 
-    // An aggregate is not the column of the same name: neither its type nor
-    // its db_type applies.
+    // An aggregate is typed by its result, not by the column of the same
+    // name.
+    let agg_spec;
     let (col, spec, db_type) = if let Some(agg) = agg_match {
-        (
-            Expr::expr(build_aggregate(agg)?),
-            &ColumnTypeSpec::Unknown,
-            None,
-        )
+        let (agg_type, agg_db_type) = aggregate_type(agg, col_types, db_types);
+        agg_spec = agg_type;
+        (Expr::expr(build_aggregate(agg)?), &agg_spec, agg_db_type)
     } else {
         (
             make_col_expr(col_name, default_table),
