@@ -121,8 +121,8 @@ class ModelMeta:
     extra: dict[str, Any] = dataclass_field(default_factory=dict)
     # Cached IR type hints for Rust decoding (computed at finalization)
     column_types: dict[str, dict] | None = None
-    # Explicit db_type overrides by column, sent with queries (PostgreSQL
-    # casts filter values to an array override)
+    # Array db_type overrides by column, sent with queries (PostgreSQL
+    # casts filter values to them)
     column_db_types: dict[str, str] | None = None
     # Reverse mapping: db_column → field_name (only where they differ)
     reverse_column_map: dict[str, str] = dataclass_field(default_factory=dict)

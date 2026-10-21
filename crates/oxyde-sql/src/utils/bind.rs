@@ -317,6 +317,37 @@ fn element_array_type(item: &ColumnTypeSpec) -> Option<ArrayType> {
     }
 }
 
+/// The first element of an array value that is not of the array's element
+/// type, such as a float in a `Decimal` array or an integer beyond 64 bits
+/// (bound as a string) in an integer one. NULL elements bind as their
+/// item's typed NULL, so they always fit.
+///
+/// PostgreSQL array binding drops such an element as NULL, and NULL
+/// elements compare equal there, so a filter value with one would match
+/// the wrong rows.
+pub(crate) fn mismatched_array_element(value: &Value) -> Option<&Value> {
+    let Value::Array(arr_type, Some(elements)) = value else {
+        return None;
+    };
+    elements.iter().find(|element| {
+        !matches!(
+            (arr_type, element),
+            (ArrayType::Bool, Value::Bool(_))
+                | (ArrayType::BigInt, Value::BigInt(_))
+                | (ArrayType::Double, Value::Double(_))
+                | (ArrayType::String, Value::String(_))
+                | (ArrayType::Bytes, Value::Bytes(_))
+                | (ArrayType::ChronoDateTime, Value::ChronoDateTime(_))
+                | (ArrayType::ChronoDateTimeUtc, Value::ChronoDateTimeUtc(_))
+                | (ArrayType::ChronoDate, Value::ChronoDate(_))
+                | (ArrayType::ChronoTime, Value::ChronoTime(_))
+                | (ArrayType::Uuid, Value::Uuid(_))
+                | (ArrayType::Decimal, Value::Decimal(_))
+                | (ArrayType::Json, Value::Json(_))
+        )
+    })
+}
+
 fn postgres_enum_cast_type(spec: &ColumnTypeSpec) -> Option<String> {
     match spec {
         ColumnTypeSpec::Enum { name, .. } => Some(quote_pg_type_path(name)),

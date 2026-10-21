@@ -154,8 +154,8 @@ def build_select_ir(
         column_types: Optional mapping of column name to ColumnTypeSpec dict
             ({"kind": ...}). Used by Rust for typed binding and decoding
         column_db_types: Optional mapping of column name (keyed like
-            column_types) to its db_type override. PostgreSQL filters cast
-            array values to an array override.
+            column_types) to its array db_type override. PostgreSQL filters
+            cast array values to it.
         pk_column: Primary key column name, used for deduplication in JOIN queries.
     """
     payload: dict[str, Any] = {
@@ -270,7 +270,7 @@ def build_update_ir(
         values: Values to update
         filter_tree: Filter conditions
         column_types: ColumnTypeSpec dicts for typed parameter binding.
-        column_db_types: db_type overrides by column, for filter casts.
+        column_db_types: Array db_type overrides by column, for filter casts.
         model: Model name
         returning: Whether to return updated rows
         bulk_update: Bulk update rows

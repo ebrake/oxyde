@@ -467,6 +467,23 @@ class TestArrayRoundTrip:
         assert await query.count(using=db.name) == 1
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "filters",
+        [
+            {"amounts": [1.5]},
+            {"ratios": [Decimal("2.5")]},
+            {"amounts__in": [[Decimal("1")], [1.5]]},
+        ],
+    )
+    async def test_list_filter_elements_of_another_type_raise(self, db, filters):
+        # PostgreSQL bound such elements as NULL, and NULL elements compare
+        # equal there, so the filter matched rows holding [None]. The other
+        # backends compared a JSON value of another type.
+        query = ConvertedValues.objects.filter(**filters)
+        with pytest.raises(RuntimeError, match="does not match the array's element type"):
+            await query.count(using=db.name)
+
+    @pytest.mark.asyncio
     async def test_null_list(self, db):
         obj = await AllTypes.objects.create(str_list=None, using=db.name)
         fetched = await AllTypes.objects.get(id=obj.id, using=db.name)

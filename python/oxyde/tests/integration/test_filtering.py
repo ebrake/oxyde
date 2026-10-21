@@ -496,6 +496,15 @@ class TestStringLookupsOnJson:
         assert [(row.name, row.body) for row in rows] == [("a", "hello")]
 
     @pytest.mark.asyncio
+    async def test_json_null_matches_nothing(self, db):
+        # 'null' is JSON text, so it is stored as a JSON null and read back
+        # as None. MySQL's JSON_UNQUOTE() alone printed it as 'null'.
+        await ConvertedValues.objects.create(name="a", body="null", using=db.name)
+        for lookup in [{"body__startswith": "nu"}, {"body__icontains": "NULL"}]:
+            query = ConvertedValues.objects.filter(**lookup)
+            assert await query.count(using=db.name) == 0, lookup
+
+    @pytest.mark.asyncio
     async def test_non_json_text_on_sqlite(self, db):
         if detect_dialect(db.url) != "sqlite":
             pytest.skip("only SQLite stores a str that is not JSON")

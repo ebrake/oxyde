@@ -63,7 +63,7 @@ class PgDbTypes(Model):
     tstz_arr: list[datetime] | None = Field(
         default=None, db_nullable=True, db_type="TIMESTAMPTZ[]"
     )
-    # Elements are JSON text: '"a"' is stored as the JSON string "a"
+    # Elements are JSON values: a str element is a JSON string, never parsed
     jsonb_arr: list[str | None] | None = Field(
         default=None, db_nullable=True, db_type="JSONB[]"
     )

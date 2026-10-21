@@ -309,13 +309,14 @@ class TestQueryColumnTypes:
 
 
 class TestColumnDbTypes:
-    """Queries carry each column's db_type override, keyed like
+    """Queries carry each column's array db_type override, keyed like
     column_types, for PostgreSQL to cast array filter values to (integer[]
     has no = with bigint[])."""
 
     def test_select_sends_the_overrides(self):
         ir = ArrayFieldModel.objects.filter(scores=[1, 2]).to_ir()
-        assert ir["column_db_types"] == {"scores": "INTEGER[]", "raw": "JSON"}
+        # `raw` (db_type="JSON") is not an array override, so it stays home.
+        assert ir["column_db_types"] == {"scores": "INTEGER[]"}
         # Conditions themselves carry no type information.
         assert "db_type" not in get_filter_condition(ir)
 
@@ -336,7 +337,7 @@ class TestColumnDbTypes:
         await query.delete(client=stub)
         await query.increment("id", client=stub)
         for call in stub.calls:
-            assert call["column_db_types"] == {"scores": "INTEGER[]", "raw": "JSON"}
+            assert call["column_db_types"] == {"scores": "INTEGER[]"}
 
 
 class TestStringLookups:

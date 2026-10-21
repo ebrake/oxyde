@@ -9,6 +9,7 @@ use super::pg_array::{out_of_range_element, pg_array_type};
 use super::render::render_col;
 use crate::aggregate::build_aggregate;
 use crate::error::{QueryError, Result};
+use crate::utils::bind::mismatched_array_element;
 use crate::utils::{bind_value, typed_value_expr, ColumnIdent, TableIdent};
 use crate::Dialect;
 
@@ -94,10 +95,10 @@ fn pg_array_cast(
     dialect: Dialect,
 ) -> Option<Result<String>> {
     match (dialect, spec, db_type) {
-        (Dialect::Postgres, ColumnTypeSpec::Array { item }, Some(db_type))
+        (Dialect::Postgres, ColumnTypeSpec::Array { .. }, Some(db_type))
             if db_type.trim().ends_with("[]") =>
         {
-            Some(pg_array_type(item, db_type))
+            Some(pg_array_type(db_type))
         }
         _ => None,
     }
@@ -107,12 +108,19 @@ fn pg_array_cast(
 ///
 /// `=`, `!=` and `IN` answer values the array type cannot hold themselves;
 /// an ordering comparison against one raises rather than fail the cast.
+/// An array element of another type than the field's (a float in a
+/// `list[Decimal]`) raises on every backend.
 fn filter_value_expr(
     value: Value,
     spec: &ColumnTypeSpec,
     array_cast: Option<&Result<String>>,
     dialect: Dialect,
 ) -> Result<SimpleExpr> {
+    if let (Value::Array(arr_type, _), Some(element)) = (&value, mismatched_array_element(&value)) {
+        return Err(QueryError::InvalidQuery(format!(
+            "Array element {element:?} does not match the array's element type {arr_type:?}"
+        )));
+    }
     match (array_cast, &value) {
         (Some(Ok(array_type)), Value::Array(..)) => {
             if let Some(shown) = out_of_range_element(&value, array_type) {
@@ -153,19 +161,26 @@ fn never_equal(col: Expr, equal: bool, dialect: Dialect) -> SimpleExpr {
 
 /// Left side of LIKE / ILIKE. A `str` field stored as JSON matches the
 /// string it reads back as, not its quoted JSON text.
+///
+/// The document is not always a string: a `str` value that is JSON text
+/// (`'123'`, `'null'`) is stored as that JSON value. A JSON null matches
+/// nothing on every backend; other documents match as each database prints
+/// them.
 fn like_target(col: Expr, spec: &ColumnTypeSpec, dialect: Dialect) -> Expr {
     if !matches!(spec, ColumnTypeSpec::Json | ColumnTypeSpec::JsonBinary) {
         return col;
     }
     let template = match dialect {
         Dialect::Postgres => "{col} #>> '{}'",
-        Dialect::Mysql => "JSON_UNQUOTE({col})",
+        // JSON_UNQUOTE() prints a JSON null as 'null'; `#>>` and
+        // json_extract() give SQL NULL.
+        Dialect::Mysql => {
+            "CASE WHEN JSON_TYPE({col}) = 'NULL' THEN NULL ELSE JSON_UNQUOTE({col}) END"
+        }
         // SQLite does not validate JSON columns, and json_extract() raises
         // on text that is not JSON, so it is checked first; such text
         // matches as stored. Flags 9 accept RFC 8259 text (1) and strictly
-        // valid JSONB blobs (8). String lookups only reach `str` fields, so
-        // a document that is not a string was written by another client; it
-        // matches the value json_extract() gives it.
+        // valid JSONB blobs (8).
         Dialect::Sqlite => {
             "CASE WHEN json_valid({col}, 9) THEN json_extract({col}, '$') ELSE {col} END"
         }

@@ -165,6 +165,56 @@ fn values_the_array_type_cannot_hold_equal_nothing() {
 }
 
 #[test]
+fn array_elements_of_another_type_are_an_error() {
+    // PostgreSQL would bind each of these elements as NULL, and NULL
+    // elements compare equal there, so the filter would match rows holding
+    // [None]. The other backends would compare a JSON value of another type.
+    let decimal = || ColumnTypeSpec::Decimal {
+        precision: None,
+        scale: None,
+    };
+    let beyond_i64 = || arr(vec![rmpv::Value::from(1_u64 << 63)]);
+    let cases = [
+        (arr(vec![rmpv::Value::F64(1.5)]), decimal()),
+        (arr(vec![rmpv::Value::F64(1.5)]), ColumnTypeSpec::BigInteger),
+        (arr(vec![s("2.5")]), ColumnTypeSpec::Double),
+        (arr(vec![true.into()]), ColumnTypeSpec::BigInteger),
+        (beyond_i64(), ColumnTypeSpec::BigInteger),
+    ];
+    for (value, item) in cases {
+        for dialect in [Dialect::Postgres, Dialect::Mysql, Dialect::Sqlite] {
+            for (operator, value) in [
+                ("=", value.clone()),
+                ("!=", value.clone()),
+                (">", value.clone()),
+                ("IN", arr(vec![value.clone()])),
+                ("BETWEEN", arr(vec![value.clone(), value.clone()])),
+            ] {
+                let err = Condition::new(operator, value, array_of(item.clone())).error(dialect);
+                assert!(
+                    err.contains("does not match the array's element type"),
+                    "{item:?} {operator} {dialect:?}: {err}"
+                );
+            }
+        }
+    }
+
+    // An integer beyond 64 bits is not just out of range for INTEGER[]:
+    // it does not bind as an integer at all.
+    let err = int_array_override("=", beyond_i64()).error(Dialect::Postgres);
+    assert!(err.contains("9223372036854775808"), "{err}");
+
+    // NULL elements fit any array, and integers convert to the element type.
+    for value in [arr(vec![rmpv::Value::Nil, 1.into()]), arr(vec![2.into()])] {
+        for item in [decimal(), ColumnTypeSpec::Double] {
+            for dialect in [Dialect::Postgres, Dialect::Mysql, Dialect::Sqlite] {
+                Condition::new("=", value.clone(), array_of(item.clone())).build(dialect);
+            }
+        }
+    }
+}
+
+#[test]
 fn unreadable_array_overrides_are_an_error() {
     let ints = || arr(vec![1.into()]);
     for db_type in ["INTEGER[][]", "VARCHAR(10[]"] {
@@ -240,8 +290,16 @@ fn like_on_json_columns_matches_the_unquoted_string() {
         let (sql, _) = case_insensitive.build(Dialect::Postgres);
         assert!(sql.contains(r#"LOWER("tags" #>> '{}') LIKE $1"#), "{sql}");
 
-        let (sql, _) = case_sensitive.build(Dialect::Mysql);
-        assert!(sql.contains("(JSON_UNQUOTE(`tags`)) LIKE ?"), "{sql}");
+        // A JSON null matches nothing, as `#>>` and json_extract() give
+        // SQL NULL for it; JSON_UNQUOTE() alone would give 'null'.
+        let (sql, params) = case_sensitive.build(Dialect::Mysql);
+        assert!(
+            sql.contains(
+                "(CASE WHEN JSON_TYPE(`tags`) = 'NULL' THEN NULL ELSE JSON_UNQUOTE(`tags`) END) LIKE ?"
+            ),
+            "{sql}"
+        );
+        assert_eq!(params.len(), 1);
 
         let (sql, _) = case_sensitive.build(Dialect::Sqlite);
         assert!(
