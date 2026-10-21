@@ -475,13 +475,31 @@ class TestArrayRoundTrip:
             {"amounts__in": [[Decimal("1")], [1.5]]},
         ],
     )
-    async def test_list_filter_elements_of_another_type_raise(self, db, filters):
+    async def test_list_filter_elements_of_another_type(self, db, filters):
         # PostgreSQL bound such elements as NULL, and NULL elements compare
-        # equal there, so the filter matched rows holding [None]. The other
-        # backends compared a JSON value of another type.
+        # equal there, so the filter matched rows holding [None]; it now
+        # raises. JSON arrays (MySQL, SQLite) compare each element as given.
         query = ConvertedValues.objects.filter(**filters)
-        with pytest.raises(RuntimeError, match="does not match the array's element type"):
-            await query.count(using=db.name)
+        if detect_dialect(db.url) == "postgres":
+            with pytest.raises(RuntimeError, match="does not match the array's element type"):
+                await query.count(using=db.name)
+        else:
+            assert await query.count(using=db.name) == 0
+
+    @pytest.mark.asyncio
+    async def test_union_list_filter(self, db):
+        dialect = detect_dialect(db.url)
+        if dialect == "mysql":
+            pytest.skip("array equality filters do not match on MySQL")
+        query = ConvertedValues.objects.filter(labels=["a", 1])
+        if dialect == "postgres":
+            # TEXT[] cannot hold the 1: it would bind as NULL.
+            with pytest.raises(RuntimeError, match="does not match the array's element type"):
+                await query.count(using=db.name)
+            return
+        # A JSON array keeps each element's own type, as saved.
+        await ConvertedValues.objects.create(labels=["a", 1], using=db.name)
+        assert await query.count(using=db.name) == 1
 
     @pytest.mark.asyncio
     async def test_null_list(self, db):

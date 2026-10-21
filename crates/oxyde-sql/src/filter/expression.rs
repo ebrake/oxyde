@@ -108,18 +108,24 @@ fn pg_array_cast(
 ///
 /// `=`, `!=` and `IN` answer values the array type cannot hold themselves;
 /// an ordering comparison against one raises rather than fail the cast.
-/// An array element of another type than the field's (a float in a
-/// `list[Decimal]`) raises on every backend.
+/// On PostgreSQL, an array element of another type than the column's (a
+/// float in a `list[Decimal]`) raises, as it would bind as NULL. JSON arrays
+/// (MySQL, SQLite) encode each element as given, exactly as a saved value,
+/// so the members of a union element type (`list[str | int]`) all match.
 fn filter_value_expr(
     value: Value,
     spec: &ColumnTypeSpec,
     array_cast: Option<&Result<String>>,
     dialect: Dialect,
 ) -> Result<SimpleExpr> {
-    if let (Value::Array(arr_type, _), Some(element)) = (&value, mismatched_array_element(&value)) {
-        return Err(QueryError::InvalidQuery(format!(
-            "Array element {element:?} does not match the array's element type {arr_type:?}"
-        )));
+    if dialect == Dialect::Postgres {
+        if let (Value::Array(arr_type, _), Some(element)) =
+            (&value, mismatched_array_element(&value))
+        {
+            return Err(QueryError::InvalidQuery(format!(
+                "Array element {element:?} does not match the array's element type {arr_type:?}"
+            )));
+        }
     }
     match (array_cast, &value) {
         (Some(Ok(array_type)), Value::Array(..)) => {

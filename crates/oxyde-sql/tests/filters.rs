@@ -165,10 +165,12 @@ fn values_the_array_type_cannot_hold_equal_nothing() {
 }
 
 #[test]
-fn array_elements_of_another_type_are_an_error() {
+fn array_elements_of_another_type_are_an_error_on_postgres() {
     // PostgreSQL would bind each of these elements as NULL, and NULL
     // elements compare equal there, so the filter would match rows holding
-    // [None]. The other backends would compare a JSON value of another type.
+    // [None]. MySQL and SQLite encode each element of a JSON array as
+    // given, exactly as a saved value, so a union element type
+    // (`list[str | int]`, whose spec is its first member's) still matches.
     let decimal = || ColumnTypeSpec::Decimal {
         precision: None,
         scale: None,
@@ -180,21 +182,24 @@ fn array_elements_of_another_type_are_an_error() {
         (arr(vec![s("2.5")]), ColumnTypeSpec::Double),
         (arr(vec![true.into()]), ColumnTypeSpec::BigInteger),
         (beyond_i64(), ColumnTypeSpec::BigInteger),
+        (arr(vec![s("a"), 1.into()]), ColumnTypeSpec::Text),
     ];
     for (value, item) in cases {
-        for dialect in [Dialect::Postgres, Dialect::Mysql, Dialect::Sqlite] {
-            for (operator, value) in [
-                ("=", value.clone()),
-                ("!=", value.clone()),
-                (">", value.clone()),
-                ("IN", arr(vec![value.clone()])),
-                ("BETWEEN", arr(vec![value.clone(), value.clone()])),
-            ] {
-                let err = Condition::new(operator, value, array_of(item.clone())).error(dialect);
-                assert!(
-                    err.contains("does not match the array's element type"),
-                    "{item:?} {operator} {dialect:?}: {err}"
-                );
+        for (operator, value) in [
+            ("=", value.clone()),
+            ("!=", value.clone()),
+            (">", value.clone()),
+            ("IN", arr(vec![value.clone()])),
+            ("BETWEEN", arr(vec![value.clone(), value.clone()])),
+        ] {
+            let condition = Condition::new(operator, value, array_of(item.clone()));
+            let err = condition.error(Dialect::Postgres);
+            assert!(
+                err.contains("does not match the array's element type"),
+                "{item:?} {operator}: {err}"
+            );
+            for dialect in [Dialect::Mysql, Dialect::Sqlite] {
+                condition.build(dialect);
             }
         }
     }

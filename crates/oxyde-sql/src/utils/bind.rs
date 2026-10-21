@@ -322,9 +322,9 @@ fn element_array_type(item: &ColumnTypeSpec) -> Option<ArrayType> {
 /// (bound as a string) in an integer one. NULL elements bind as their
 /// item's typed NULL, so they always fit.
 ///
-/// PostgreSQL array binding drops such an element as NULL, and NULL
-/// elements compare equal there, so a filter value with one would match
-/// the wrong rows.
+/// Only PostgreSQL arrays are typed: their binding drops such an element as
+/// NULL, and NULL elements compare equal there, so a filter value with one
+/// would match the wrong rows. JSON arrays encode each element as given.
 pub(crate) fn mismatched_array_element(value: &Value) -> Option<&Value> {
     let Value::Array(arr_type, Some(elements)) = value else {
         return None;
