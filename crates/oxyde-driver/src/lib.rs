@@ -60,7 +60,8 @@
 //!
 //! # SQLite PRAGMAs
 //!
-//! Applied via `after_connect` hook:
+//! Applied via `after_connect` hook, which also registers oxyde's SQL
+//! functions (`oxyde_array_match`, used by array lookups):
 //! - `journal_mode=WAL` (10-20x faster concurrent writes)
 //! - `synchronous=NORMAL` (balance speed/safety)
 //! - `cache_size=10000` (~10MB cache)
@@ -74,6 +75,7 @@ mod error;
 mod execute;
 mod pool;
 mod settings;
+mod sqlite_functions;
 mod transaction;
 
 pub mod backend;

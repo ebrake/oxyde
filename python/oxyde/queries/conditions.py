@@ -9,6 +9,7 @@ Attributes:
     value: Comparison value (can be None for IS NULL)
     column: Database column name (may differ from field if db_column set)
     escape: Optional LIKE escape character for pattern filters
+    db_type: The field's db_type override (array and JSON fields; PostgreSQL casts to it)
 
 Operators:
     "="        → Equality
@@ -20,6 +21,9 @@ Operators:
     "BETWEEN"  → Range (value is [low, high])
     "IS NULL"  → NULL check
     "IS NOT NULL" → NOT NULL check
+    "ARRAY_CONTAINS"     → Array holds every given element
+    "ARRAY_CONTAINED_BY" → Every stored element is among the given ones
+    "ARRAY_OVERLAP"      → At least one element in common
 
 Creation:
     Conditions are typically created via Field comparison operators:
@@ -27,7 +31,7 @@ Creation:
         User.age >= 18        → Condition("age", ">=", 18)
 
     Or via lookups module:
-        _build_lookup_conditions(User, "name", "contains", "alice", meta)
+        _build_lookup_conditions(User, "name", "contains", "alice", meta, spec)
         → Condition("name", "LIKE", "%alice%")
 
 IR Format:
@@ -63,12 +67,14 @@ class Condition:
         *,
         column: str | None = None,
         escape: str | None = None,
+        db_type: str | None = None,
     ):
         self.field = field
         self.operator = operator
         self.value = value
         self.column = column or field
         self.escape = escape
+        self.db_type = db_type
 
     def to_ir(self) -> FilterNode:
         """Convert to IR format expected by the Rust codec.
@@ -83,6 +89,7 @@ class Condition:
             value=serialize_value(self.value),
             column=self.column,
             escape=self.escape,
+            db_type=self.db_type,
         )
 
 
