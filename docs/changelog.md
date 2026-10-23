@@ -12,6 +12,7 @@ All notable changes to Oxyde are documented here.
 
 ### Bug Fixes
 
+- **PostgreSQL `SMALLINT` and `SMALLINT[]` decoding** — model fields and raw scalar queries now return Python integers instead of `None`, including negative values and the 16-bit boundaries. Null values are preserved.
 - **Joins to a model with renamed columns** — `join()` and FK-traversal filters (`filter(author__name=...)`) failed with `no column found for name` when the related model's primary key set `db_column`, and on SQLite returned undecoded JSON for a related list/JSON field with `db_column`. Joined result columns are named by field, but the primary-key lookup and the column types used for decoding were keyed by column name.
 - **Array fields with a `db_type` override on PostgreSQL** — `filter(small=[1, 2])` and `small__in=[...]` on a field declared with `db_type="INTEGER[]"` (or another array type narrower than the default) failed with `operator does not exist: integer[] = bigint[]`. Values are now cast to the column's type. An element that the column's type cannot hold (`100000` for `SMALLINT[]`) equals no row, so `exclude()` keeps every non-null row, and an array override Oxyde cannot read (`JSON[]`) raises an error naming it.
 - **`list[bytes]` fields on PostgreSQL** — saving one failed with `Unsupported parameter type for Postgres: Array(Bytes, None)`. They are now stored and loaded as `BYTEA[]`.
